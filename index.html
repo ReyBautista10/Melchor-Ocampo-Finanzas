@@ -283,10 +283,14 @@
       else if (state.vista === 'bitacora') main.innerHTML = `<h3 class="text-lg font-bold" style="color:#1B365D">Bitácora del Sistema</h3>`;
     }
 
-    function cambiarVista(v) {
-      state.vista = v;
-      renderApp();
-    }
+    async function cambiarVista(v) {
+  state.vista = v;
+  if (v === 'usuarios' || v === 'comites') {
+    await cargarComites();
+  }
+  renderApp();
+}
+
 
     function renderUsuarios(main) {
       let comiteOptions = `<option value="">Sin comité</option>`;
