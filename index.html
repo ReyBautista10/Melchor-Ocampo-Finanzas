@@ -1,445 +1,379 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sistema de Comités Escolares</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
-<body class="bg-gray-100 font-sans text-gray-800">
-  <div id="app"></div>
+<body class="bg-gray-100 text-gray-800 min-h-screen flex flex-col font-sans">
+
+  <!-- HEADER -->
+  <header style="background-color: #1B365D;" class="text-white shadow-md">
+    <div class="max-w-4xl mx-auto px-4 py-3 flex justify-between items-center">
+      <div>
+        <h1 class="text-lg font-bold leading-tight">Sistema de Comités Escolares</h1>
+        <p id="hdrUser" class="text-xs text-gray-300"></p>
+      </div>
+      <button id="btnLogout" onclick="logout()" class="hidden bg-red-600 hover:bg-red-700 text-white text-xs px-3 py-1.5 rounded transition">
+        Cerrar sesión
+      </button>
+    </div>
+  </header>
+
+  <!-- CONTENIDO PRINCIPAL -->
+  <main id="app" class="flex-1 max-w-4xl w-full mx-auto p-4"></main>
 
   <script>
-    const SUPABASE_URL = "https://bklzxolimbxyatlloanp.supabase.co";
-    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJrbHp4b2xpbWJ4eWF0bGxvYW5wIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkyMTg4MzksImV4cCI6MjEwNDc5NDgzOX0.qDb5llaNmbJINUt48bySfci8XBO4F3N-AqlGjKjq4V0";
-    const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    // ==========================================
+    // CONFIGURACIÓN DE SUPABASE
+    // ==========================================
+    const SUPABASE_URL = "https://TU_SUPABASE_URL.supabase.co"; // Replace with your URL
+    const SUPABASE_KEY = "TU_SUPABASE_ANON_KEY";               // Replace with your anon key
+    const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-    const COLOR = "#1C3D5A";
-
-    const state = {
+    // ESTADO GLOBAL DE LA APP
+    let state = {
       usuario: null,
+      vista: 'inicio'
     };
 
-    const app = document.getElementById("app");
+    let comitesLista = [];
 
-    function errBox(t) { return `<div class="text-xs mb-3 p-2 rounded-lg" style="background:#F5E4E1; color:#B5453A">${t}</div>`; }
-    function okBox(t) { return `<div class="text-xs mb-3 p-2 rounded-lg" style="background:#E6F0EA; color:#3F7A5E">${t}</div>`; }
+    // ==========================================
+    // HELPERS UI
+    // ==========================================
+    function errBox(msg) {
+      return `<div class="bg-red-100 border border-red-400 text-red-700 px-3 py-2 rounded text-xs mb-3">${msg}</div>`;
+    }
 
-    function init() {
+    function okBox(msg) {
+      return `<div class="bg-green-100 border border-green-400 text-green-700 px-3 py-2 rounded text-xs mb-3">${msg}</div>`;
+    }
+
+    // ==========================================
+    // INICIALIZACIÓN Y NAVEGACIÓN
+    // ==========================================
+    window.addEventListener('DOMContentLoaded', async () => {
+      // Verificar si hay un token de activación en la URL
       const params = new URLSearchParams(window.location.search);
-      const token = params.get("token");
-      if (token) { renderEstablecerPassword(token); return; }
+      const tokenAct = params.get('token');
 
-      const guardado = sessionStorage.getItem("comite_usuario");
-      if (guardado) {
-        state.usuario = JSON.parse(guardado);
+      if (tokenAct) {
+        renderFormularioActivacion(tokenAct);
+        return;
+      }
+
+      // Verificar sesión local guardada
+      const userSesion = localStorage.getItem('usuario_sesion');
+      if (userSesion) {
+        state.usuario = JSON.parse(userSesion);
+        actualizarHeader();
+        await cargarComites();
         renderApp();
       } else {
         renderLogin();
       }
+    });
+
+    function actualizarHeader() {
+      const hdrUser = document.getElementById("hdrUser");
+      const btnLogout = document.getElementById("btnLogout");
+      if (state.usuario) {
+        hdrUser.textContent = `${state.usuario.nombre_completo} · ${state.usuario.rol}`;
+        btnLogout.classList.remove("hidden");
+      } else {
+        hdrUser.textContent = "";
+        btnLogout.classList.add("hidden");
+      }
     }
 
-    function renderLogin(mensajeExtra) {
-      app.innerHTML = `
-        <div class="min-h-screen flex items-center justify-center p-5">
-          <div class="w-full max-w-sm p-6 rounded-2xl bg-white border" style="border-color:#E1DED5">
-            <div class="text-center mb-6">
-              <div class="text-xl font-semibold" style="color:${COLOR}">Sistema de Comités Escolares</div>
-              <div class="text-xs mt-1" style="color:#6C7B8A">Control financiero de comités</div>
-            </div>
-            ${mensajeExtra || ""}
-            <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Usuario</label>
-            <input id="loginUsuario" class="w-full px-3 py-2 rounded-lg text-sm mb-3 outline-none border" style="border-color:#E1DED5" />
-            <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Contraseña</label>
-            <input id="loginPassword" type="password" class="w-full px-3 py-2 rounded-lg text-sm mb-2 outline-none border" style="border-color:#E1DED5" />
-            <button id="olvideBtn" type="button" class="text-xs mb-3 underline" style="color:${COLOR}">¿Olvidaste tu contraseña?</button>
-            <div id="loginMsg"></div>
-            <button id="loginBtn" class="w-full py-2.5 rounded-lg text-sm font-bold text-white" style="background:${COLOR}">Entrar</button>
-          </div>
-        </div>`;
-
-      document.getElementById("loginPassword").addEventListener("keydown", e => { if (e.key === "Enter") iniciarSesion(); });
-      document.getElementById("loginBtn").addEventListener("click", iniciarSesion);
-      document.getElementById("olvideBtn").addEventListener("click", renderOlvidePassword);
-    }
-
-    async function iniciarSesion() {
-      const usuario = document.getElementById("loginUsuario").value.trim();
-      const password = document.getElementById("loginPassword").value;
-      const msg = document.getElementById("loginMsg");
-      msg.innerHTML = "";
-      if (!usuario || !password) { msg.innerHTML = errBox("Escribe tu usuario y contraseña."); return; }
-
-      const { data, error } = await sb.rpc("login_comite", { p_usuario: usuario, p_password: password });
-      if (error || !data || !data[0]) { msg.innerHTML = errBox("Usuario o contraseña incorrectos."); return; }
-
-      state.usuario = data[0];
-      sessionStorage.setItem("comite_usuario", JSON.stringify(state.usuario));
-      renderApp();
-    }
-
-    function cerrarSesion() {
-      sessionStorage.removeItem("comite_usuario");
+    function logout() {
+      localStorage.removeItem('usuario_sesion');
       state.usuario = null;
+      actualizarHeader();
       renderLogin();
     }
 
-    function renderOlvidePassword() {
-      app.innerHTML = `
-        <div class="min-h-screen flex items-center justify-center p-5">
-          <div class="w-full max-w-sm p-6 rounded-2xl bg-white border" style="border-color:#E1DED5">
-            <div class="text-center mb-6">
-              <div class="text-lg font-semibold" style="color:${COLOR}">Recuperar contraseña</div>
-              <div class="text-xs mt-1" style="color:#6C7B8A">Se avisará a tu Director para que te comparta un link nuevo por WhatsApp.</div>
-            </div>
-            <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Tu usuario</label>
-            <input id="olvideUsuario" class="w-full px-3 py-2 rounded-lg text-sm mb-3 outline-none border" style="border-color:#E1DED5" />
-            <div id="olvideMsg"></div>
-            <button id="olvideEnviarBtn" class="w-full py-2.5 rounded-lg text-sm font-bold text-white mb-2" style="background:${COLOR}">Solicitar recuperación</button>
-            <button id="olvideVolverBtn" type="button" class="w-full py-2 rounded-lg text-sm font-semibold" style="background:#F4F1EB; color:${COLOR}">Volver</button>
-          </div>
-        </div>`;
-
-      document.getElementById("olvideVolverBtn").addEventListener("click", () => renderLogin());
-      document.getElementById("olvideEnviarBtn").addEventListener("click", async () => {
-        const usuario = document.getElementById("olvideUsuario").value.trim();
-        const msg = document.getElementById("olvideMsg");
-        msg.innerHTML = "";
-        if (!usuario) { msg.innerHTML = errBox("Escribe tu usuario."); return; }
-        const { error } = await sb.rpc("password_solicitar_recuperacion", { p_usuario: usuario });
-        if (error) { msg.innerHTML = errBox(error.message); return; }
-        msg.innerHTML = okBox("Solicitud enviada. Tu Director verá el link en 'Solicitudes' y te lo compartirá por WhatsApp.");
-      });
+    async function cargarComites() {
+      const { data } = await sb.from("comites").select("*").order("nombre");
+      if (data) comitesLista = data;
     }
 
-    function renderEstablecerPassword(token) {
+    // ==========================================
+    // PANTALLA DE LOGIN
+    // ==========================================
+    function renderLogin() {
+      const app = document.getElementById("app");
       app.innerHTML = `
-        <div class="min-h-screen flex items-center justify-center p-5">
-          <div class="w-full max-w-sm p-6 rounded-2xl bg-white border" style="border-color:#E1DED5">
-            <div class="text-center mb-6">
-              <div class="text-lg font-semibold" style="color:${COLOR}">Crear tu contraseña</div>
-              <div class="text-xs mt-1" style="color:#6C7B8A">Mínimo 8 caracteres, con mayúscula, minúscula, número y carácter especial.</div>
-            </div>
-            <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Nueva contraseña</label>
-            <input id="estNueva" type="password" class="w-full px-3 py-2 rounded-lg text-sm mb-3 outline-none border" style="border-color:#E1DED5" />
-            <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Confirmar contraseña</label>
-            <input id="estConfirmar" type="password" class="w-full px-3 py-2 rounded-lg text-sm mb-4 outline-none border" style="border-color:#E1DED5" />
-            <div id="estMsg"></div>
-            <button id="estGuardarBtn" class="w-full py-2.5 rounded-lg text-sm font-bold text-white" style="background:${COLOR}">Guardar contraseña</button>
-          </div>
-        </div>`;
-
-      document.getElementById("estGuardarBtn").addEventListener("click", async () => {
-        const nueva = document.getElementById("estNueva").value;
-        const confirmar = document.getElementById("estConfirmar").value;
-        const msg = document.getElementById("estMsg");
-        msg.innerHTML = "";
-        if (nueva !== confirmar) { msg.innerHTML = errBox("Las contraseñas no coinciden."); return; }
-
-        const { error } = await sb.rpc("password_establecer", { p_token: token, p_password_nueva: nueva });
-        if (error) { msg.innerHTML = errBox(error.message); return; }
-
-        msg.innerHTML = okBox("Contraseña creada. Ya puedes entrar.");
-        setTimeout(() => { window.location.href = window.location.pathname; }, 1500);
-      });
-    }
-
-    const MENU = [
-      { id: "inicio", label: "Inicio", roles: ["Super Administrador", "Director", "Presidente", "Tesorero"] },
-      { id: "usuarios", label: "Usuarios", roles: ["Super Administrador", "Director"] },
-      { id: "comites", label: "Comités", roles: ["Super Administrador", "Director"] },
-      { id: "solicitudes", label: "Solicitudes de recuperación", roles: ["Super Administrador", "Director"] },
-      { id: "logs", label: "Bitácora", roles: ["Super Administrador"] },
-    ];
-
-    function renderApp(seccion) {
-      const activa = seccion || "inicio";
-      const menuVisible = MENU.filter(m => m.roles.includes(state.usuario.rol));
-
-      app.innerHTML = `
-        <div class="min-h-screen">
-          <div class="px-4 py-3 flex items-center justify-between" style="background:${COLOR}">
+        <div class="max-w-sm mx-auto bg-white p-6 rounded-xl shadow-md border mt-10" style="border-color:#E1DED5">
+          <h2 class="text-xl font-bold text-center mb-4" style="color:#1B365D">Iniciar Sesión</h2>
+          <div id="loginMsg"></div>
+          <div class="space-y-3">
             <div>
-              <div class="text-base font-semibold text-white">Sistema de Comités Escolares</div>
-              <div class="text-xs" style="color:#B9C3CC">${state.usuario.nombre_completo} · ${state.usuario.rol}${state.usuario.comite_nombre ? " · " + state.usuario.comite_nombre : ""}</div>
+              <label class="block text-xs font-semibold mb-1 text-gray-600">Usuario</label>
+              <input id="lUsuario" type="text" class="w-full px-3 py-2 border rounded-lg text-sm outline-none focus:ring-1 focus:ring-blue-900" style="border-color:#E1DED5">
             </div>
-            <button id="logoutBtn" class="px-3 py-1.5 rounded-lg text-xs font-semibold" style="background:#B5453A; color:#fff">Cerrar sesión</button>
+            <div>
+              <label class="block text-xs font-semibold mb-1 text-gray-600">Contraseña</label>
+              <input id="lPassword" type="password" class="w-full px-3 py-2 border rounded-lg text-sm outline-none focus:ring-1 focus:ring-blue-900" style="border-color:#E1DED5">
+            </div>
+            <button id="btnLoginAction" class="w-full py-2.5 rounded-lg text-white font-semibold text-sm transition shadow" style="background-color:#1B365D">
+              Ingresar
+            </button>
           </div>
-          <div class="flex flex-wrap gap-1 px-4 py-2" style="background:#fff; border-bottom:1px solid #E1DED5">
-            ${menuVisible.map(m => `
-              <button class="menuBtn px-3 py-1.5 rounded-lg text-sm font-semibold" data-id="${m.id}"
-                style="background:${activa === m.id ? COLOR : "transparent"}; color:${activa === m.id ? "#fff" : COLOR}">
-                ${m.label}
-              </button>`).join("")}
-          </div>
-          <div id="main" class="p-5"></div>
-        </div>`;
+        </div>
+      `;
 
-      document.getElementById("logoutBtn").addEventListener("click", cerrarSesion);
-      document.querySelectorAll(".menuBtn").forEach(b => b.addEventListener("click", () => renderApp(b.dataset.id)));
+      document.getElementById("btnLoginAction").addEventListener("click", async () => {
+        const msg = document.getElementById("loginMsg");
+        msg.innerHTML = "";
+        const u = document.getElementById("lUsuario").value.trim();
+        const p = document.getElementById("lPassword").value;
 
-      const main = document.getElementById("main");
-      if (activa === "inicio") return renderInicio(main);
-      if (activa === "usuarios") return renderUsuarios(main);
-      if (activa === "comites") return renderComites(main);
-      if (activa === "solicitudes") return renderSolicitudes(main);
-      if (activa === "logs") return renderLogs(main);
+        if (!u || !p) {
+          msg.innerHTML = errBox("Ingresa usuario y contraseña.");
+          return;
+        }
+
+        const { data, error } = await sb.rpc("usuario_login", { p_usuario: u, p_password: p });
+        if (error || !data || data.length === 0) {
+          msg.innerHTML = errBox("Credenciales incorrectas.");
+          return;
+        }
+
+        state.usuario = data[0];
+        localStorage.setItem('usuario_sesion', JSON.stringify(state.usuario));
+        actualizarHeader();
+        await cargarComites();
+        renderApp();
+      });
     }
 
-    function renderInicio(main) {
+    // ==========================================
+    // PANTALLA DE ACTIVACIÓN / CREAR CONTRASEÑA
+    // ==========================================
+    function renderFormularioActivacion(token) {
+      const app = document.getElementById("app");
+      app.innerHTML = `
+        <div class="max-w-sm mx-auto bg-white p-6 rounded-xl shadow-md border mt-10" style="border-color:#E1DED5">
+          <h2 class="text-xl font-bold text-center mb-2" style="color:#1B365D">Crear tu contraseña</h2>
+          <p class="text-xs text-gray-500 text-center mb-4">Establece tu contraseña de acceso para continuar.</p>
+          <div id="actMsg"></div>
+          <div class="space-y-3">
+            <div>
+              <label class="block text-xs font-semibold mb-1 text-gray-600">Nueva contraseña</label>
+              <input id="actPass1" type="password" class="w-full px-3 py-2 border rounded-lg text-sm outline-none" style="border-color:#E1DED5">
+            </div>
+            <div>
+              <label class="block text-xs font-semibold mb-1 text-gray-600">Confirmar contraseña</label>
+              <input id="actPass2" type="password" class="w-full px-3 py-2 border rounded-lg text-sm outline-none" style="border-color:#E1DED5">
+            </div>
+            <button id="btnGuardarPass" class="w-full py-2.5 rounded-lg text-white font-semibold text-sm transition shadow" style="background-color:#1B365D">
+              Guardar contraseña
+            </button>
+          </div>
+        </div>
+      `;
+
+      document.getElementById("btnGuardarPass").addEventListener("click", async () => {
+        const msg = document.getElementById("actMsg");
+        msg.innerHTML = "";
+        const p1 = document.getElementById("actPass1").value;
+        const p2 = document.getElementById("actPass2").value;
+
+        if (!p1 || !p2) {
+          msg.innerHTML = errBox("Llena ambos campos.");
+          return;
+        }
+
+        if (p1 !== p2) {
+          msg.innerHTML = errBox("Las contraseñas no coinciden.");
+          return;
+        }
+
+        const regex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&._\-#])[A-Za-z\d@$!%*?&._\-#]{6,}$/;
+        if (!regex.test(p1)) {
+          msg.innerHTML = errBox("La contraseña requiere mínimo 6 caracteres, 1 mayúscula, 1 minúscula, 1 número y 1 carácter especial (@$!%*?&._-#).");
+          return;
+        }
+
+        const { data, error } = await sb.rpc("activar_cuenta", { p_token: token, p_password: p1 });
+        if (error) {
+          msg.innerHTML = errBox(error.message);
+          return;
+        }
+
+        msg.innerHTML = okBox("¡Contraseña guardada con éxito! Redirigiendo al inicio...");
+        setTimeout(() => {
+          window.location.href = window.location.pathname;
+        }, 2000);
+      });
+    }
+
+    // ==========================================
+    // NAV PRINCIPAL DE NAVEGACIÓN
+    // ==========================================
+    function renderApp() {
+      const app = document.getElementById("app");
+      app.innerHTML = `
+        <nav class="flex space-x-2 border-b pb-2 mb-4 overflow-x-auto text-sm font-semibold" style="border-color:#E1DED5">
+          <button onclick="cambiarVista('inicio')" class="px-3 py-1.5 rounded-lg transition ${state.vista === 'inicio' ? 'bg-blue-900 text-white' : 'bg-gray-200 text-gray-700'}">Inicio</button>
+          <button onclick="cambiarVista('usuarios')" class="px-3 py-1.5 rounded-lg transition ${state.vista === 'usuarios' ? 'bg-blue-900 text-white' : 'bg-gray-200 text-gray-700'}">Usuarios</button>
+          <button onclick="cambiarVista('comites')" class="px-3 py-1.5 rounded-lg transition ${state.vista === 'comites' ? 'bg-blue-900 text-white' : 'bg-gray-200 text-gray-700'}">Comités</button>
+          <button onclick="cambiarVista('recuperacion')" class="px-3 py-1.5 rounded-lg transition ${state.vista === 'recuperacion' ? 'bg-blue-900 text-white' : 'bg-gray-200 text-gray-700'}">Solicitudes de recuperación</button>
+          <button onclick="cambiarVista('bitacora')" class="px-3 py-1.5 rounded-lg transition ${state.vista === 'bitacora' ? 'bg-blue-900 text-white' : 'bg-gray-200 text-gray-700'}">Bitácora</button>
+        </nav>
+        <div id="mainContent"></div>
+      `;
+
+      const main = document.getElementById("mainContent");
+      if (state.vista === 'inicio') main.innerHTML = `<h3 class="text-lg font-bold" style="color:#1B365D">Bienvenido al Panel</h3>`;
+      else if (state.vista === 'usuarios') renderUsuarios(main);
+      else if (state.vista === 'comites') main.innerHTML = `<h3 class="text-lg font-bold" style="color:#1B365D">Gestión de Comités</h3>`;
+      else if (state.vista === 'recuperacion') main.innerHTML = `<h3 class="text-lg font-bold" style="color:#1B365D">Solicitudes de Recuperación</h3>`;
+      else if (state.vista === 'bitacora') main.innerHTML = `<h3 class="text-lg font-bold" style="color:#1B365D">Bitácora del Sistema</h3>`;
+    }
+
+    function cambiarVista(v) {
+      state.vista = v;
+      renderApp();
+    }
+
+    // ==========================================
+    // MÓDULO DE USUARIOS
+    // ==========================================
+    function renderUsuarios(main) {
+      let comiteOptions = `<option value="">Sin comité</option>`;
+      comitesLista.forEach(c => {
+        comiteOptions += `<option value="${c.id}">${c.nombre}</option>`;
+      });
+
       main.innerHTML = `
-        <h2 class="text-lg font-bold mb-2" style="color:${COLOR}">Bienvenido/a, ${state.usuario.nombre_completo}</h2>
-        <p class="text-sm" style="color:#6C7B8A">Rol: <strong>${state.usuario.rol}</strong>${state.usuario.comite_nombre ? " — " + state.usuario.comite_nombre : ""}</p>
-        <div class="mt-4 p-4 rounded-xl bg-white border max-w-md" style="border-color:#E1DED5">
-          <p class="text-sm" style="color:#1C2B3A">Este es el arranque del sistema (Fase 1: usuarios, comités y accesos). Los módulos de movimientos, transferencias, auditorías y reportes se irán agregando en las siguientes fases.</p>
-        </div>`;
-    }
-
-    async function renderUsuarios(main) {
-      main.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Cargando…</p>`;
-      const [{ data: usuarios, error: errU }, { data: comitesData }] = await Promise.all([
-        sb.rpc("usuarios_listar", { p_solicitante_id: state.usuario.id }),
-        sb.rpc("comites_listar"),
-      ]);
-      if (errU) { main.innerHTML = errBox(errU.message); return; }
-      const comitesLista = comitesData || [];
-
-      function comiteOptionsHtml(comiteIdSeleccionado) {
-        return `<option value="">Sin comité</option>` +
-          comitesLista.map(c => `<option value="${c.id}" ${c.id === comiteIdSeleccionado ? "selected" : ""}>${c.nombre}</option>`).join("");
-      }
-
-      function actualizarCamposPorRol(prefijo) {
-  const rol = document.getElementById(`${prefijo}Rol`).value;
-  const comiteSel = document.getElementById(`${prefijo}Comite`);
-  const saldoCajaInput = document.getElementById(`${prefijo}SaldoCaja`);
-  const comiteId = comiteSel.value;
-  const comite = comitesLista.find(c => c.id === comiteId);
-  const wrapAcreimex = document.getElementById(`${prefijo}AcreimexWrap`);
-
-  const esAdministrativo = (rol === "Director" || rol === "Super Administrador");
-
-  if (esAdministrativo) {
-    comiteSel.value = "";
-    comiteSel.disabled = true;
-    if (saldoCajaInput) {
-      saldoCajaInput.value = "0";
-      saldoCajaInput.disabled = true;
-    }
-  } else {
-    comiteSel.disabled = false;
-    if (saldoCajaInput) {
-      saldoCajaInput.disabled = false;
-    }
-  }
-
-  // Regla estricta: Solo Tesorero de 'Padres de Familia' maneja Acreimex
-  const esTesoreroPadres = (rol === "Tesorero") && comite && (comite.nombre === "Padres de Familia");
-  
-  if (wrapAcreimex) {
-    wrapAcreimex.style.display = esTesoreroPadres ? "block" : "none";
-  }
-}
-
-
-      main.innerHTML = `
-        <h2 class="text-lg font-bold mb-4" style="color:${COLOR}">Usuarios</h2>
-        <div class="max-w-2xl">
-          <div class="p-4 rounded-xl bg-white border mb-3" style="border-color:#E1DED5">
-            <p class="text-sm font-semibold mb-2" style="color:${COLOR}">Nuevo usuario</p>
-            <div class="grid grid-cols-2 gap-2 mb-2">
-              <input id="nuUsuario" placeholder="Usuario (login)" class="px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
-              <input id="nuNombre" placeholder="Nombre completo" class="px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
-            </div>
-            <div class="grid grid-cols-2 gap-2 mb-2">
-              <input id="nuTelefono" placeholder="Teléfono (WhatsApp)" class="px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
-              <select id="nuRol" class="px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5">
-                <option value="Presidente">Presidente</option>
-                <option value="Tesorero">Tesorero</option>
-                ${state.usuario.rol === "Super Administrador" ? `<option value="Director">Director</option>` : ""}
-              </select>
-            </div>
-            <div class="grid grid-cols-2 gap-2 mb-2">
-              <select id="nuComite" class="px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5">
-                ${comiteOptionsHtml(null)}
-              </select>
-              <input id="nuSaldoCaja" type="number" step="0.01" placeholder="Saldo inicial caja chica" class="px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
-            </div>
-            <div id="nuAcreimexWrap" style="display:none" class="mb-2">
-              <input id="nuSaldoAcreimex" type="number" step="0.01" placeholder="Saldo inicial cuenta Acreimex" class="w-full px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
-            </div>
-            <div id="nuMsg"></div>
-            <button id="nuGuardarBtn" class="px-3 py-1.5 rounded-lg text-sm font-bold text-white" style="background:${COLOR}">Crear usuario</button>
+        <h3 class="text-lg font-bold mb-3" style="color:#1B365D">Usuarios</h3>
+        <div class="bg-white p-4 rounded-xl shadow-sm border mb-6" style="border-color:#E1DED5">
+          <h4 class="text-sm font-bold mb-3" style="color:#1B365D">Nuevo usuario</h4>
+          <div id="nuMsg"></div>
+          <div class="grid grid-cols-2 gap-2 mb-2">
+            <input id="nuUsuario" placeholder="Usuario (login)" class="px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
+            <input id="nuNombre" placeholder="Nombre completo" class="px-2 py-1.5 rounded-lg text-sm outline-none border uppercase" style="border-color:#E1DED5" />
           </div>
-
-          <div class="space-y-2">
-            ${(usuarios || []).length === 0 ? `<p class="text-sm" style="color:#6C7B8A">Sin usuarios capturados.</p>` : usuarios.map((u, i) => `
-              <div class="p-3 rounded-xl bg-white border" style="border-color:#E1DED5; ${!u.activo ? "opacity:0.5" : ""}">
-                <div class="flex items-center justify-between gap-2">
-                  <button class="uEditarBtn text-left flex-1" data-idx="${i}">
-                    <p class="text-sm font-semibold" style="color:${COLOR}">${u.nombre_completo} <span class="text-xs font-normal" style="color:#6C7B8A">(${u.usuario})</span></p>
-                    <p class="text-xs" style="color:#6C7B8A">${u.rol}${u.comite_nombre ? " · " + u.comite_nombre : ""} · Tel: ${u.telefono}${!u.tiene_password ? " · ⏳ Pendiente de activar" : ""}${!u.activo ? " · INACTIVO" : ""}</p>
-                  </button>
-                </div>
-                <div id="uEditWrap${i}"></div>
-              </div>`).join("")}
+          <div class="grid grid-cols-2 gap-2 mb-2">
+            <input id="nuTelefono" placeholder="Teléfono (WhatsApp)" class="px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
+            <select id="nuRol" onchange="actualizarCamposPorRol('nu')" class="px-2 py-1.5 rounded-lg text-sm outline-none border bg-white" style="border-color:#E1DED5">
+              <option value="Director">Director</option>
+              <option value="Presidente">Presidente</option>
+              <option value="Tesorero">Tesorero</option>
+              <option value="Super Administrador">Super Administrador</option>
+            </select>
           </div>
-          <div id="tokenGeneradoWrap"></div>
-        </div>`;
+          <div class="grid grid-cols-2 gap-2 mb-3">
+            <select id="nuComite" onchange="actualizarCamposPorRol('nu')" class="px-2 py-1.5 rounded-lg text-sm outline-none border bg-white" style="border-color:#E1DED5">
+              ${comiteOptions}
+            </select>
+            <input id="nuSaldoCaja" type="number" placeholder="Saldo inicial caja chica" class="px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
+          </div>
+          <div id="nuAcreimexWrap" class="mb-3 hidden">
+            <input id="nuSaldoAcreimex" type="number" placeholder="Saldo inicial cuenta Acreimex" class="w-full px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
+          </div>
+          <button id="nuGuardarBtn" class="px-4 py-2 rounded-lg text-white font-semibold text-sm transition shadow" style="background-color:#1B365D">
+            Crear usuario
+          </button>
+        </div>
+      `;
 
-      document.getElementById("nuRol").addEventListener("change", () => actualizarCamposPorRol("nu"));
-      document.getElementById("nuComite").addEventListener("change", () => actualizarCamposPorRol("nu"));
-      actualizarCamposPorRol("nu");
+      actualizarCamposPorRol('nu');
 
+      // LISTENER: CONVERSIÓN DE NOMBRE A MAYÚSCULAS SIN ACENTOS NI CARACTERES ESPECIALES
+      document.getElementById("nuNombre").addEventListener("input", (e) => {
+        e.target.value = e.target.value
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "") // Remueve acentos / diacríticos
+          .toUpperCase()                   // Convierte a MAYÚSCULAS
+          .replace(/[^A-Z0-9 ]/g, "");     // Quita símbolos y caracteres especiales
+      });
+
+      // ACCIÓN CREAR USUARIO
       document.getElementById("nuGuardarBtn").addEventListener("click", async () => {
         const msg = document.getElementById("nuMsg");
         msg.innerHTML = "";
+
         const usuario = document.getElementById("nuUsuario").value.trim();
         const nombre = document.getElementById("nuNombre").value.trim();
         const telefono = document.getElementById("nuTelefono").value.trim();
-        if (!usuario || !nombre || !telefono) { msg.innerHTML = errBox("Completa usuario, nombre y teléfono."); return; }
+        const rol = document.getElementById("nuRol").value;
+        const comiteId = document.getElementById("nuComite").value || null;
+        const saldoCaja = Number(document.getElementById("nuSaldoCaja").value) || 0;
+        const saldoAcreimexVal = document.getElementById("nuSaldoAcreimex").value;
+        const saldoAcreimex = saldoAcreimexVal !== "" ? Number(saldoAcreimexVal) : null;
+
+        if (!usuario || !nombre || !telefono) {
+          msg.innerHTML = errBox("Completa los campos obligatorios.");
+          return;
+        }
 
         const { data, error } = await sb.rpc("usuario_crear", {
           p_creado_por: state.usuario.id,
           p_usuario: usuario,
           p_nombre_completo: nombre,
           p_telefono: telefono,
-          p_rol: document.getElementById("nuRol").value,
-          p_comite_id: document.getElementById("nuComite").value || null,
-          p_saldo_inicial_caja: Number(document.getElementById("nuSaldoCaja").value) || 0,
-          p_saldo_inicial_acreimex: document.getElementById("nuSaldoAcreimex").value ? Number(document.getElementById("nuSaldoAcreimex").value) : null,
+          p_rol: rol,
+          p_comite_id: comiteId,
+          p_saldo_inicial_caja: saldoCaja,
+          p_saldo_inicial_acreimex: saldoAcreimex
         });
-        if (error) { msg.innerHTML = errBox(error.message); return; }
 
-        const link = `${window.location.origin}${window.location.pathname}?token=${data[0].token_activacion}`;
-        document.getElementById("tokenGeneradoWrap").innerHTML = `
-          <div class="p-4 rounded-xl mt-3" style="background:#E6F0EA; border:1px solid #3F7A5E">
-            <p class="text-sm font-semibold mb-1" style="color:${COLOR}">Usuario creado. Comparte este link por WhatsApp para que active su cuenta:</p>
-            <p class="text-xs break-all" style="color:#1C2B3A">${link}</p>
-          </div>`;
-        renderUsuarios(main);
+        if (error) {
+          msg.innerHTML = errBox(error.message);
+          return;
+        }
+
+        const token = data[0].token_activacion;
+        const link = `${window.location.origin}${window.location.pathname}?token=${token}`;
+
+        msg.innerHTML = okBox(`
+          Usuario creado con éxito.<br>
+          <b>Enlace de activación (WhatsApp):</b><br>
+          <a href="${link}" target="_blank" class="underline font-mono text-xs break-all">${link}</a>
+        `);
       });
-
-      main.querySelectorAll(".uEditarBtn").forEach(b => b.addEventListener("click", () => {
-        const u = usuarios[Number(b.dataset.idx)];
-        const wrap = document.getElementById(`uEditWrap${b.dataset.idx}`);
-        if (wrap.innerHTML) { wrap.innerHTML = ""; return; }
-
-        const prefijo = `ed${b.dataset.idx}`;
-        wrap.innerHTML = `
-          <div class="mt-3 pt-3" style="border-top:1px solid #E1DED5">
-            <div class="grid grid-cols-2 gap-2 mb-2">
-              <input id="${prefijo}Nombre" value="${u.nombre_completo}" class="px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
-              <input id="${prefijo}Telefono" value="${u.telefono}" class="px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
-            </div>
-            <div class="grid grid-cols-2 gap-2 mb-2">
-              <select id="${prefijo}Rol" class="px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5">
-                <option value="Presidente" ${u.rol === "Presidente" ? "selected" : ""}>Presidente</option>
-                <option value="Tesorero" ${u.rol === "Tesorero" ? "selected" : ""}>Tesorero</option>
-                ${state.usuario.rol === "Super Administrador" ? `<option value="Director" ${u.rol === "Director" ? "selected" : ""}>Director</option>` : ""}
-              </select>
-              <select id="${prefijo}Comite" class="px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5">
-                ${comiteOptionsHtml(u.comite_id)}
-              </select>
-            </div>
-            <div id="${prefijo}AcreimexWrap" style="display:none" class="mb-2">
-              <p class="text-xs" style="color:#6C7B8A">Saldo Acreimex registrado: $${u.saldo_acreimex ?? 0}</p>
-            </div>
-            <div id="${prefijo}Msg"></div>
-            <button id="${prefijo}GuardarBtn" class="px-3 py-1.5 rounded-lg text-sm font-bold text-white" style="background:${COLOR}">Guardar cambios</button>
-          </div>`;
-
-        document.getElementById(`${prefijo}Rol`).addEventListener("change", () => actualizarCamposPorRol(prefijo));
-        document.getElementById(`${prefijo}Comite`).addEventListener("change", () => actualizarCamposPorRol(prefijo));
-        actualizarCamposPorRol(prefijo);
-
-        document.getElementById(`${prefijo}GuardarBtn`).addEventListener("click", async () => {
-          const msg = document.getElementById(`${prefijo}Msg`);
-          msg.innerHTML = "";
-          const { error } = await sb.rpc("usuario_modificar", {
-            p_solicitante_id: state.usuario.id,
-            p_usuario_id: u.id,
-            p_nombre_completo: document.getElementById(`${prefijo}Nombre`).value.trim(),
-            p_telefono: document.getElementById(`${prefijo}Telefono`).value.trim(),
-            p_rol: document.getElementById(`${prefijo}Rol`).value,
-            p_comite_id: document.getElementById(`${prefijo}Comite`).value || null,
-          });
-          if (error) { msg.innerHTML = errBox(error.message); return; }
-          renderUsuarios(main);
-        });
-      }));
     }
 
-    async function renderLogs(main) {
-      main.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Cargando…</p>`;
-      const { data, error } = await sb.rpc("bitacora_listar", { p_solicitante_id: state.usuario.id });
-      if (error) { main.innerHTML = errBox(error.message); return; }
+    // ==========================================
+    // REGLAS DINÁMICAS DE CAMPOS SEGÚN EL ROL
+    // ==========================================
+    function actualizarCamposPorRol(prefijo) {
+      const rol = document.getElementById(`${prefijo}Rol`).value;
+      const comiteSel = document.getElementById(`${prefijo}Comite`);
+      const saldoCajaInput = document.getElementById(`${prefijo}SaldoCaja`);
+      const comiteId = comiteSel.value;
+      const comite = comitesLista.find(c => c.id === comiteId);
+      const wrapAcreimex = document.getElementById(`${prefijo}AcreimexWrap`);
 
-      main.innerHTML = `
-        <h2 class="text-lg font-bold mb-4" style="color:${COLOR}">Bitácora del sistema</h2>
-        <div class="max-w-2xl space-y-2">
-          ${(data || []).length === 0 ? `<p class="text-sm" style="color:#6C7B8A">Sin movimientos registrados todavía.</p>` : data.map(l => `
-            <div class="p-3 rounded-xl bg-white border" style="border-color:#E1DED5">
-              <p class="text-sm font-semibold" style="color:${COLOR}">${l.accion}</p>
-              <p class="text-xs" style="color:#1C2B3A">${l.detalle || ""}</p>
-              <p class="text-xs mt-1" style="color:#6C7B8A">
-                Por: ${l.realizado_por_nombre || "—"}
-                ${l.autorizado_por_1_nombre ? " · Autorizó: " + l.autorizado_por_1_nombre : ""}
-                ${l.autorizado_por_2_nombre ? " y " + l.autorizado_por_2_nombre : ""}
-                · ${new Date(l.fecha_hora).toLocaleString("es-MX")}
-              </p>
-            </div>`).join("")}
-        </div>`;
+      const esAdministrativo = (rol === "Director" || rol === "Super Administrador");
+
+      if (esAdministrativo) {
+        comiteSel.value = "";
+        comiteSel.disabled = true;
+        if (saldoCajaInput) {
+          saldoCajaInput.value = "0";
+          saldoCajaInput.disabled = true;
+        }
+      } else {
+        comiteSel.disabled = false;
+        if (saldoCajaInput) {
+          saldoCajaInput.disabled = false;
+        }
+      }
+
+      // Solo el Tesorero del comité 'Padres de Familia' maneja la cuenta Acreimex
+      const esTesoreroPadres = (rol === "Tesorero") && comite && (comite.nombre === "Padres de Familia");
+
+      if (wrapAcreimex) {
+        wrapAcreimex.style.display = esTesoreroPadres ? "block" : "none";
+      }
     }
-
-    async function renderComites(main) {
-      main.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Cargando…</p>`;
-      const { data, error } = await sb.rpc("comites_listar");
-      if (error) { main.innerHTML = errBox(error.message); return; }
-
-      main.innerHTML = `
-        <h2 class="text-lg font-bold mb-4" style="color:${COLOR}">Comités</h2>
-        <div class="max-w-md">
-          <div class="space-y-2">
-            ${(data || []).length === 0 ? `<p class="text-sm" style="color:#6C7B8A">Sin comités registrados.</p>` : data.map(c => `
-              <div class="p-3 rounded-xl bg-white border flex justify-between items-center" style="border-color:#E1DED5">
-                <p class="text-sm font-semibold" style="color:${COLOR}">${c.nombre}</p>
-                ${c.maneja_acreimex ? `<span class="text-xs px-2 py-0.5 rounded" style="background:#E6F0EA; color:#3F7A5E">Cuenta Acreimex</span>` : ''}
-              </div>`).join("")}
-          </div>
-        </div>`;
-    }
-
-    async function renderSolicitudes(main) {
-      main.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Cargando…</p>`;
-      const { data, error } = await sb.rpc("tokens_pendientes_listar", { p_solicitante_id: state.usuario.id });
-      if (error) { main.innerHTML = errBox(error.message); return; }
-
-      main.innerHTML = `
-        <h2 class="text-lg font-bold mb-4" style="color:${COLOR}">Solicitudes de recuperación / activación</h2>
-        <div class="max-w-lg space-y-2">
-          ${(data || []).length === 0 ? `<p class="text-sm" style="color:#6C7B8A">No hay solicitudes pendientes.</p>` : data.map((t, i) => `
-            <div class="p-3 rounded-xl bg-white border" style="border-color:#E1DED5">
-              <p class="text-sm font-semibold" style="color:${COLOR}">${t.nombre_completo} <span class="text-xs font-normal" style="color:#6C7B8A">(${t.usuario})</span></p>
-              <p class="text-xs mb-2" style="color:#6C7B8A">${t.tipo} · Tel: ${t.telefono} · Vence: ${new Date(t.expira_en).toLocaleString("es-MX")}</p>
-              <div class="flex gap-2">
-                <input readonly id="linkTok${i}" value="${window.location.origin}${window.location.pathname}?token=${t.token}" class="flex-1 px-2 py-1 rounded text-xs border" style="border-color:#E1DED5" />
-                <button class="copiarBtn px-2 py-1 rounded-lg text-xs font-semibold" data-i="${i}" style="background:#F4F1EB; color:${COLOR}">Copiar</button>
-              </div>
-            </div>`).join("")}
-        </div>`;
-
-      main.querySelectorAll(".copiarBtn").forEach(b => b.addEventListener("click", () => {
-        const input = document.getElementById(`linkTok${b.dataset.i}`);
-        input.select();
-        navigator.clipboard.writeText(input.value);
-        b.textContent = "¡Copiado!";
-        setTimeout(() => { b.textContent = "Copiar"; }, 1500);
-      }));
-    }
-
-    init();
   </script>
 </body>
 </html>
