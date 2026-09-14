@@ -27,10 +27,10 @@
 
   <script>
     // ==========================================
-    // CONFIGURACIÓN DE SUPABASE
+    // CONFIGURACIÓN DE SUPABASE (REEMPLAZA CON TUS CLAVES REALES)
     // ==========================================
-    const SUPABASE_URL = "https://TU_SUPABASE_URL.supabase.co"; // Replace with your URL
-    const SUPABASE_KEY = "TU_SUPABASE_ANON_KEY";               // Replace with your anon key
+    const SUPABASE_URL = "https://TU_PROYECTO.supabase.co"; 
+    const SUPABASE_KEY = "TU_ANON_KEY_AQUI";               
     const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
     // ESTADO GLOBAL DE LA APP
@@ -56,7 +56,6 @@
     // INICIALIZACIÓN Y NAVEGACIÓN
     // ==========================================
     window.addEventListener('DOMContentLoaded', async () => {
-      // Verificar si hay un token de activación en la URL
       const params = new URLSearchParams(window.location.search);
       const tokenAct = params.get('token');
 
@@ -65,7 +64,6 @@
         return;
       }
 
-      // Verificar sesión local guardada
       const userSesion = localStorage.getItem('usuario_sesion');
       if (userSesion) {
         state.usuario = JSON.parse(userSesion);
@@ -102,7 +100,7 @@
     }
 
     // ==========================================
-    // PANTALLA DE LOGIN
+    // PANTALLA DE LOGIN CON RECUPERACIÓN DE CONTRASEÑA
     // ==========================================
     function renderLogin() {
       const app = document.getElementById("app");
@@ -122,6 +120,11 @@
             <button id="btnLoginAction" class="w-full py-2.5 rounded-lg text-white font-semibold text-sm transition shadow" style="background-color:#1B365D">
               Ingresar
             </button>
+            <div class="text-center mt-3">
+              <button onclick="renderSolicitudRecuperacion()" class="text-xs text-blue-900 hover:underline">
+                ¿Olvidaste tu contraseña?
+              </button>
+            </div>
           </div>
         </div>
       `;
@@ -152,7 +155,54 @@
     }
 
     // ==========================================
-    // PANTALLA DE ACTIVACIÓN / CREAR CONTRASEÑA
+    // FORMULARIO DE SOLICITUD DE RECUPERACIÓN
+    // ==========================================
+    function renderSolicitudRecuperacion() {
+      const app = document.getElementById("app");
+      app.innerHTML = `
+        <div class="max-w-sm mx-auto bg-white p-6 rounded-xl shadow-md border mt-10" style="border-color:#E1DED5">
+          <h2 class="text-xl font-bold text-center mb-2" style="color:#1B365D">Recuperar Contraseña</h2>
+          <p class="text-xs text-gray-500 text-center mb-4">Ingresa tu usuario para solicitar el enlace de restauración.</p>
+          <div id="recMsg"></div>
+          <div class="space-y-3">
+            <div>
+              <label class="block text-xs font-semibold mb-1 text-gray-600">Usuario</label>
+              <input id="recUsuario" type="text" class="w-full px-3 py-2 border rounded-lg text-sm outline-none" style="border-color:#E1DED5">
+            </div>
+            <button id="btnSolicitarRec" class="w-full py-2.5 rounded-lg text-white font-semibold text-sm transition shadow" style="background-color:#1B365D">
+              Enviar solicitud
+            </button>
+            <div class="text-center">
+              <button onclick="renderLogin()" class="text-xs text-gray-600 hover:underline">
+                Volver al inicio de sesión
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+
+      document.getElementById("btnSolicitarRec").addEventListener("click", async () => {
+        const msg = document.getElementById("recMsg");
+        msg.innerHTML = "";
+        const u = document.getElementById("recUsuario").value.trim();
+
+        if (!u) {
+          msg.innerHTML = errBox("Ingresa tu nombre de usuario.");
+          return;
+        }
+
+        const { error } = await sb.rpc("solicitar_recuperacion", { p_usuario: u });
+        if (error) {
+          msg.innerHTML = errBox(error.message);
+          return;
+        }
+
+        msg.innerHTML = okBox("Solicitud enviada. El administrador o director te enviará tu enlace por WhatsApp.");
+      });
+    }
+
+    // ==========================================
+    // PANTALLA DE ACTIVACIÓN Y NAVEGACIÓN
     // ==========================================
     function renderFormularioActivacion(token) {
       const app = document.getElementById("app");
@@ -212,9 +262,6 @@
       });
     }
 
-    // ==========================================
-    // NAV PRINCIPAL DE NAVEGACIÓN
-    // ==========================================
     function renderApp() {
       const app = document.getElementById("app");
       app.innerHTML = `
@@ -241,9 +288,6 @@
       renderApp();
     }
 
-    // ==========================================
-    // MÓDULO DE USUARIOS
-    // ==========================================
     function renderUsuarios(main) {
       let comiteOptions = `<option value="">Sin comité</option>`;
       comitesLista.forEach(c => {
@@ -285,16 +329,15 @@
 
       actualizarCamposPorRol('nu');
 
-      // LISTENER: CONVERSIÓN DE NOMBRE A MAYÚSCULAS SIN ACENTOS NI CARACTERES ESPECIALES
+      // CONVERSIÓN AUTOMÁTICA DEL NOMBRE A MAYÚSCULAS Y SIN ACENTOS
       document.getElementById("nuNombre").addEventListener("input", (e) => {
         e.target.value = e.target.value
           .normalize("NFD")
-          .replace(/[\u0300-\u036f]/g, "") // Remueve acentos / diacríticos
-          .toUpperCase()                   // Convierte a MAYÚSCULAS
-          .replace(/[^A-Z0-9 ]/g, "");     // Quita símbolos y caracteres especiales
+          .replace(/[\u0300-\u036f]/g, "")
+          .toUpperCase()
+          .replace(/[^A-Z0-9 ]/g, "");
       });
 
-      // ACCIÓN CREAR USUARIO
       document.getElementById("nuGuardarBtn").addEventListener("click", async () => {
         const msg = document.getElementById("nuMsg");
         msg.innerHTML = "";
@@ -340,9 +383,6 @@
       });
     }
 
-    // ==========================================
-    // REGLAS DINÁMICAS DE CAMPOS SEGÚN EL ROL
-    // ==========================================
     function actualizarCamposPorRol(prefijo) {
       const rol = document.getElementById(`${prefijo}Rol`).value;
       const comiteSel = document.getElementById(`${prefijo}Comite`);
@@ -367,7 +407,6 @@
         }
       }
 
-      // Solo el Tesorero del comité 'Padres de Familia' maneja la cuenta Acreimex
       const esTesoreroPadres = (rol === "Tesorero") && comite && (comite.nombre === "Padres de Familia");
 
       if (wrapAcreimex) {
