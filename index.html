@@ -211,26 +211,37 @@
       }
 
       function actualizarCamposPorRol(prefijo) {
-        const rol = document.getElementById(`${prefijo}Rol`).value;
-        const comiteSel = document.getElementById(`${prefijo}Comite`);
-        const comiteId = comiteSel.value;
-        const comite = comitesLista.find(c => c.id === comiteId);
-        const wrapAcreimex = document.getElementById(`${prefijo}AcreimexWrap`);
+  const rol = document.getElementById(`${prefijo}Rol`).value;
+  const comiteSel = document.getElementById(`${prefijo}Comite`);
+  const saldoCajaInput = document.getElementById(`${prefijo}SaldoCaja`);
+  const comiteId = comiteSel.value;
+  const comite = comitesLista.find(c => c.id === comiteId);
+  const wrapAcreimex = document.getElementById(`${prefijo}AcreimexWrap`);
 
-        if (rol === "Director") {
-          comiteSel.value = "";
-          comiteSel.disabled = true;
-        } else {
-          comiteSel.disabled = false;
-        }
+  const esAdministrativo = (rol === "Director" || rol === "Super Administrador");
 
-        // Regla estricta: Solo Tesorero de 'Padres de Familia' maneja Acreimex
-        const esTesoreroPadres = (rol === "Tesorero") && comite && (comite.nombre === "Padres de Familia");
-        
-        if (wrapAcreimex) {
-          wrapAcreimex.style.display = esTesoreroPadres ? "block" : "none";
-        }
-      }
+  if (esAdministrativo) {
+    comiteSel.value = "";
+    comiteSel.disabled = true;
+    if (saldoCajaInput) {
+      saldoCajaInput.value = "0";
+      saldoCajaInput.disabled = true;
+    }
+  } else {
+    comiteSel.disabled = false;
+    if (saldoCajaInput) {
+      saldoCajaInput.disabled = false;
+    }
+  }
+
+  // Regla estricta: Solo Tesorero de 'Padres de Familia' maneja Acreimex
+  const esTesoreroPadres = (rol === "Tesorero") && comite && (comite.nombre === "Padres de Familia");
+  
+  if (wrapAcreimex) {
+    wrapAcreimex.style.display = esTesoreroPadres ? "block" : "none";
+  }
+}
+
 
       main.innerHTML = `
         <h2 class="text-lg font-bold mb-4" style="color:${COLOR}">Usuarios</h2>
