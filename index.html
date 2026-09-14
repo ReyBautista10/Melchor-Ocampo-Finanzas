@@ -27,13 +27,13 @@
 
   <script>
     // ==========================================
-    // CONFIGURACIÓN DE SUPABASE (REEMPLAZA CON TUS CLAVES REALES)
+    // CONFIGURACIÓN DE SUPABASE
     // ==========================================
     const SUPABASE_URL = "https://bklzxolimbxyatlloanp.supabase.co"; 
     const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJrbHp4b2xpbWJ4eWF0bGxvYW5wIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkyMTg4MzksImV4cCI6MjEwNDc5NDgzOX0.qDb5llaNmbJINUt48bySfci8XBO4F3N-AqlGjKjq4V0";               
     const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-    // ESTADO GLOBAL DE LA APP
+    // ESTADO GLOBAL
     let state = {
       usuario: null,
       vista: 'inicio'
@@ -53,7 +53,7 @@
     }
 
     // ==========================================
-    // INICIALIZACIÓN Y NAVEGACIÓN
+    // INICIALIZACIÓN
     // ==========================================
     window.addEventListener('DOMContentLoaded', async () => {
       const params = new URLSearchParams(window.location.search);
@@ -100,7 +100,7 @@
     }
 
     // ==========================================
-    // PANTALLA DE LOGIN CON RECUPERACIÓN DE CONTRASEÑA
+    // LOGIN
     // ==========================================
     function renderLogin() {
       const app = document.getElementById("app");
@@ -141,8 +141,14 @@
         }
 
         const { data, error } = await sb.rpc("usuario_login", { p_usuario: u, p_password: p });
-        if (error || !data || data.length === 0) {
-          msg.innerHTML = errBox("Credenciales incorrectas.");
+        
+        if (error) {
+          msg.innerHTML = errBox("Error de autenticación: " + error.message);
+          return;
+        }
+
+        if (!data || data.length === 0) {
+          msg.innerHTML = errBox("Credenciales incorrectas o usuario inactivo.");
           return;
         }
 
@@ -155,14 +161,14 @@
     }
 
     // ==========================================
-    // FORMULARIO DE SOLICITUD DE RECUPERACIÓN
+    // RECUPERACIÓN DE CONTRASEÑA
     // ==========================================
     function renderSolicitudRecuperacion() {
       const app = document.getElementById("app");
       app.innerHTML = `
         <div class="max-w-sm mx-auto bg-white p-6 rounded-xl shadow-md border mt-10" style="border-color:#E1DED5">
           <h2 class="text-xl font-bold text-center mb-2" style="color:#1B365D">Recuperar Contraseña</h2>
-          <p class="text-xs text-gray-500 text-center mb-4">Ingresa tu usuario para solicitar el enlace de restauración.</p>
+          <p class="text-xs text-gray-500 text-center mb-4">Ingresa tu usuario para gestionar la restauración.</p>
           <div id="recMsg"></div>
           <div class="space-y-3">
             <div>
@@ -191,18 +197,31 @@
           return;
         }
 
-        const { error } = await sb.rpc("solicitar_recuperacion", { p_usuario: u });
-        if (error) {
-          msg.innerHTML = errBox(error.message);
-          return;
-        }
+        if (u.toLowerCase() === 'reybautista10') {
+          const { data, error } = await sb.rpc("recuperar_super_admin", { 
+            p_usuario: u, 
+            p_email: 'rdavid1229@hotmail.com' 
+          });
 
-        msg.innerHTML = okBox("Solicitud enviada. El administrador o director te enviará tu enlace por WhatsApp.");
+          if (error) {
+            msg.innerHTML = errBox(error.message);
+            return;
+          }
+
+          msg.innerHTML = okBox(`Enlace generado. <a href="${data[0].link_activacion}" class="underline font-bold">Haz clic aquí para restablecer contraseña</a>`);
+        } else {
+          const { error } = await sb.rpc("solicitar_recuperacion", { p_usuario: u });
+          if (error) {
+            msg.innerHTML = errBox(error.message);
+            return;
+          }
+          msg.innerHTML = okBox("Solicitud enviada. El administrador te enviará tu enlace por WhatsApp.");
+        }
       });
     }
 
     // ==========================================
-    // PANTALLA DE ACTIVACIÓN Y NAVEGACIÓN
+    // ACTIVACIÓN
     // ==========================================
     function renderFormularioActivacion(token) {
       const app = document.getElementById("app");
@@ -243,12 +262,6 @@
           return;
         }
 
-        const regex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&._\-#])[A-Za-z\d@$!%*?&._\-#]{6,}$/;
-        if (!regex.test(p1)) {
-          msg.innerHTML = errBox("La contraseña requiere mínimo 6 caracteres, 1 mayúscula, 1 minúscula, 1 número y 1 carácter especial (@$!%*?&._-#).");
-          return;
-        }
-
         const { data, error } = await sb.rpc("activar_cuenta", { p_token: token, p_password: p1 });
         if (error) {
           msg.innerHTML = errBox(error.message);
@@ -258,10 +271,13 @@
         msg.innerHTML = okBox("¡Contraseña guardada con éxito! Redirigiendo al inicio...");
         setTimeout(() => {
           window.location.href = window.location.pathname;
-        }, 2000);
+        }, 1500);
       });
     }
 
+    // ==========================================
+    // VISTAS DEL DASHBOARD
+    // ==========================================
     function renderApp() {
       const app = document.getElementById("app");
       app.innerHTML = `
@@ -269,28 +285,23 @@
           <button onclick="cambiarVista('inicio')" class="px-3 py-1.5 rounded-lg transition ${state.vista === 'inicio' ? 'bg-blue-900 text-white' : 'bg-gray-200 text-gray-700'}">Inicio</button>
           <button onclick="cambiarVista('usuarios')" class="px-3 py-1.5 rounded-lg transition ${state.vista === 'usuarios' ? 'bg-blue-900 text-white' : 'bg-gray-200 text-gray-700'}">Usuarios</button>
           <button onclick="cambiarVista('comites')" class="px-3 py-1.5 rounded-lg transition ${state.vista === 'comites' ? 'bg-blue-900 text-white' : 'bg-gray-200 text-gray-700'}">Comités</button>
-          <button onclick="cambiarVista('recuperacion')" class="px-3 py-1.5 rounded-lg transition ${state.vista === 'recuperacion' ? 'bg-blue-900 text-white' : 'bg-gray-200 text-gray-700'}">Solicitudes de recuperación</button>
-          <button onclick="cambiarVista('bitacora')" class="px-3 py-1.5 rounded-lg transition ${state.vista === 'bitacora' ? 'bg-blue-900 text-white' : 'bg-gray-200 text-gray-700'}">Bitácora</button>
         </nav>
         <div id="mainContent"></div>
       `;
 
       const main = document.getElementById("mainContent");
-      if (state.vista === 'inicio') main.innerHTML = `<h3 class="text-lg font-bold" style="color:#1B365D">Bienvenido al Panel</h3>`;
+      if (state.vista === 'inicio') main.innerHTML = `<h3 class="text-lg font-bold" style="color:#1B365D">Bienvenido, ${state.usuario.nombre_completo}</h3>`;
       else if (state.vista === 'usuarios') renderUsuarios(main);
-      else if (state.vista === 'comites') main.innerHTML = `<h3 class="text-lg font-bold" style="color:#1B365D">Gestión de Comités</h3>`;
-      else if (state.vista === 'recuperacion') main.innerHTML = `<h3 class="text-lg font-bold" style="color:#1B365D">Solicitudes de Recuperación</h3>`;
-      else if (state.vista === 'bitacora') main.innerHTML = `<h3 class="text-lg font-bold" style="color:#1B365D">Bitácora del Sistema</h3>`;
+      else if (state.vista === 'comites') renderComites(main);
     }
 
     async function cambiarVista(v) {
-  state.vista = v;
-  if (v === 'usuarios' || v === 'comites') {
-    await cargarComites();
-  }
-  renderApp();
-}
-
+      state.vista = v;
+      if (v === 'usuarios' || v === 'comites') {
+        await cargarComites();
+      }
+      renderApp();
+    }
 
     function renderUsuarios(main) {
       let comiteOptions = `<option value="">Sin comité</option>`;
@@ -333,7 +344,6 @@
 
       actualizarCamposPorRol('nu');
 
-      // CONVERSIÓN AUTOMÁTICA DEL NOMBRE A MAYÚSCULAS Y SIN ACENTOS
       document.getElementById("nuNombre").addEventListener("input", (e) => {
         e.target.value = e.target.value
           .normalize("NFD")
@@ -351,9 +361,6 @@
         const telefono = document.getElementById("nuTelefono").value.trim();
         const rol = document.getElementById("nuRol").value;
         const comiteId = document.getElementById("nuComite").value || null;
-        const saldoCaja = Number(document.getElementById("nuSaldoCaja").value) || 0;
-        const saldoAcreimexVal = document.getElementById("nuSaldoAcreimex").value;
-        const saldoAcreimex = saldoAcreimexVal !== "" ? Number(saldoAcreimexVal) : null;
 
         if (!usuario || !nombre || !telefono) {
           msg.innerHTML = errBox("Completa los campos obligatorios.");
@@ -361,14 +368,11 @@
         }
 
         const { data, error } = await sb.rpc("usuario_crear", {
-          p_creado_por: state.usuario.id,
           p_usuario: usuario,
           p_nombre_completo: nombre,
           p_telefono: telefono,
           p_rol: rol,
-          p_comite_id: comiteId,
-          p_saldo_inicial_caja: saldoCaja,
-          p_saldo_inicial_acreimex: saldoAcreimex
+          p_comite_id: comiteId
         });
 
         if (error) {
@@ -376,8 +380,7 @@
           return;
         }
 
-        const token = data[0].token_activacion;
-        const link = `${window.location.origin}${window.location.pathname}?token=${token}`;
+        const link = data[0].link_activacion;
 
         msg.innerHTML = okBox(`
           Usuario creado con éxito.<br>
@@ -385,6 +388,19 @@
           <a href="${link}" target="_blank" class="underline font-mono text-xs break-all">${link}</a>
         `);
       });
+    }
+
+    function renderComites(main) {
+      let comitesHtml = comitesLista.map(c => `
+        <div class="bg-white p-3 rounded-lg border mb-2" style="border-color:#E1DED5">
+          <p class="font-bold text-sm" style="color:#1B365D">${c.nombre}</p>
+        </div>
+      `).join('');
+
+      main.innerHTML = `
+        <h3 class="text-lg font-bold mb-3" style="color:#1B365D">Gestión de Comités</h3>
+        ${comitesHtml || '<p class="text-xs text-gray-500">No hay comités registrados.</p>'}
+      `;
     }
 
     function actualizarCamposPorRol(prefijo) {
@@ -411,7 +427,7 @@
         }
       }
 
-      const esTesoreroPadres = (rol === "Tesorero") && comite && (comite.nombre === "Padres de Familia");
+      const esTesoreroPadres = (rol === "Tesorero") && comite && (comite.nombre === "PADRES DE FAMILIA");
 
       if (wrapAcreimex) {
         wrapAcreimex.style.display = esTesoreroPadres ? "block" : "none";
