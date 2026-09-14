@@ -1,437 +1,285 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sistema de Comités Escolares</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Comités Escolares</title>
+    <!-- Tailwind CSS desde CDN para estilos limpios y responsivos -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Cliente de Supabase JS -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
-<body class="bg-gray-100 text-gray-800 min-h-screen flex flex-col font-sans">
+<body class="bg-gray-100 font-sans min-h-screen text-gray-800">
 
-  <!-- HEADER -->
-  <header style="background-color: #1B365D;" class="text-white shadow-md">
-    <div class="max-w-4xl mx-auto px-4 py-3 flex justify-between items-center">
-      <div>
-        <h1 class="text-lg font-bold leading-tight">Sistema de Comités Escolares</h1>
-        <p id="hdrUser" class="text-xs text-gray-300"></p>
-      </div>
-      <button id="btnLogout" onclick="logout()" class="hidden bg-red-600 hover:bg-red-700 text-white text-xs px-3 py-1.5 rounded transition">
-        Cerrar sesión
-      </button>
-    </div>
-  </header>
-
-  <!-- CONTENIDO PRINCIPAL -->
-  <main id="app" class="flex-1 max-w-4xl w-full mx-auto p-4"></main>
-
-  <script>
-    // ==========================================
-    // CONFIGURACIÓN DE SUPABASE
-    // ==========================================
-    const SUPABASE_URL = "https://bklzxolimbxyatlloanp.supabase.co"; 
-    const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJrbHp4b2xpbWJ4eWF0bGxvYW5wIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkyMTg4MzksImV4cCI6MjEwNDc5NDgzOX0.qDb5llaNmbJINUt48bySfci8XBO4F3N-AqlGjKjq4V0";               
-    const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-
-    // ESTADO GLOBAL
-    let state = {
-      usuario: null,
-      vista: 'inicio'
-    };
-
-    let comitesLista = [];
-
-    // ==========================================
-    // HELPERS UI
-    // ==========================================
-    function errBox(msg) {
-      return `<div class="bg-red-100 border border-red-400 text-red-700 px-3 py-2 rounded text-xs mb-3">${msg}</div>`;
-    }
-
-    function okBox(msg) {
-      return `<div class="bg-green-100 border border-green-400 text-green-700 px-3 py-2 rounded text-xs mb-3">${msg}</div>`;
-    }
-
-    // ==========================================
-    // INICIALIZACIÓN
-    // ==========================================
-    window.addEventListener('DOMContentLoaded', async () => {
-      const params = new URLSearchParams(window.location.search);
-      const tokenAct = params.get('token');
-
-      if (tokenAct) {
-        renderFormularioActivacion(tokenAct);
-        return;
-      }
-
-      const userSesion = localStorage.getItem('usuario_sesion');
-      if (userSesion) {
-        state.usuario = JSON.parse(userSesion);
-        actualizarHeader();
-        await cargarComites();
-        renderApp();
-      } else {
-        renderLogin();
-      }
-    });
-
-    function actualizarHeader() {
-      const hdrUser = document.getElementById("hdrUser");
-      const btnLogout = document.getElementById("btnLogout");
-      if (state.usuario) {
-        hdrUser.textContent = `${state.usuario.nombre_completo} · ${state.usuario.rol}`;
-        btnLogout.classList.remove("hidden");
-      } else {
-        hdrUser.textContent = "";
-        btnLogout.classList.add("hidden");
-      }
-    }
-
-    function logout() {
-      localStorage.removeItem('usuario_sesion');
-      state.usuario = null;
-      actualizarHeader();
-      renderLogin();
-    }
-
-    async function cargarComites() {
-      const { data } = await sb.from("comites").select("*").order("nombre");
-      if (data) comitesLista = data;
-    }
-
-    // ==========================================
-    // LOGIN
-    // ==========================================
-    function renderLogin() {
-      const app = document.getElementById("app");
-      app.innerHTML = `
-        <div class="max-w-sm mx-auto bg-white p-6 rounded-xl shadow-md border mt-10" style="border-color:#E1DED5">
-          <h2 class="text-xl font-bold text-center mb-4" style="color:#1B365D">Iniciar Sesión</h2>
-          <div id="loginMsg"></div>
-          <div class="space-y-3">
+    <!-- BARRA DE NAVEGACIÓN PRINCIPAL -->
+    <header class="bg-slate-900 text-white shadow-md">
+        <div class="max-w-6xl mx-auto px-4 py-4 flex flex-wrap justify-between items-center gap-2">
             <div>
-              <label class="block text-xs font-semibold mb-1 text-gray-600">Usuario</label>
-              <input id="lUsuario" type="text" class="w-full px-3 py-2 border rounded-lg text-sm outline-none focus:ring-1 focus:ring-blue-900" style="border-color:#E1DED5">
+                <h1 class="text-xl font-bold">Sistema de Comités Escolares</h1>
+                <p class="text-xs text-gray-300">REY BAUTISTA · Super Administrador</p>
             </div>
-            <div>
-              <label class="block text-xs font-semibold mb-1 text-gray-600">Contraseña</label>
-              <input id="lPassword" type="password" class="w-full px-3 py-2 border rounded-lg text-sm outline-none focus:ring-1 focus:ring-blue-900" style="border-color:#E1DED5">
-            </div>
-            <button id="btnLoginAction" class="w-full py-2.5 rounded-lg text-white font-semibold text-sm transition shadow" style="background-color:#1B365D">
-              Ingresar
+            <button onclick="cerrarSesion()" class="bg-red-600 hover:bg-red-700 text-white font-medium px-4 py-2 rounded text-sm transition">
+                Cerrar sesión
             </button>
-            <div class="text-center mt-3">
-              <button onclick="renderSolicitudRecuperacion()" class="text-xs text-blue-900 hover:underline">
-                ¿Olvidaste tu contraseña?
-              </button>
-            </div>
-          </div>
         </div>
-      `;
+    </header>
 
-      document.getElementById("btnLoginAction").addEventListener("click", async () => {
-        const msg = document.getElementById("loginMsg");
-        msg.innerHTML = "";
-        const u = document.getElementById("lUsuario").value.trim();
-        const p = document.getElementById("lPassword").value;
+    <!-- PESTAÑAS DE NAVEGACIÓN -->
+    <nav class="max-w-6xl mx-auto px-4 mt-6">
+        <div class="flex space-x-2 border-b border-gray-300 pb-2">
+            <button id="tab-inicio-btn" onclick="cambiarTab('inicio')" class="px-4 py-2 text-sm font-semibold rounded-md bg-gray-200 text-gray-700 hover:bg-gray-300">
+                Inicio
+            </button>
+            <button id="tab-usuarios-btn" onclick="cambiarTab('usuarios')" class="px-4 py-2 text-sm font-semibold rounded-md bg-slate-900 text-white">
+                Usuarios
+            </button>
+            <button id="tab-comites-btn" onclick="cambiarTab('comites')" class="px-4 py-2 text-sm font-semibold rounded-md bg-gray-200 text-gray-700 hover:bg-gray-300">
+                Comités
+            </button>
+        </div>
+    </nav>
 
-        if (!u || !p) {
-          msg.innerHTML = errBox("Ingresa usuario y contraseña.");
-          return;
-        }
+    <!-- CONTENIDO PRINCIPAL -->
+    <main class="max-w-6xl mx-auto px-4 py-6">
 
-        const { data, error } = await sb.rpc("usuario_login", { p_usuario: u, p_password: p });
+        <!-- SECCIÓN: INICIO -->
+        <section id="sec-inicio" class="hidden">
+            <div class="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+                <h2 class="text-2xl font-bold text-gray-800 mb-2">Bienvenido al Sistema</h2>
+                <p class="text-gray-600">Selecciona una de las secciones en el menú superior para administrar los usuarios o comités de la institución.</p>
+            </div>
+        </section>
+
+        <!-- SECCIÓN: USUARIOS -->
+        <section id="sec-usuarios" class="block">
+            <div class="bg-white p-6 rounded-lg shadow-md border border-gray-200 max-w-2xl mx-auto">
+                <h2 class="text-xl font-bold mb-4 text-slate-800">Usuarios</h2>
+
+                <div id="alerta-contenedor" class="hidden mb-4"></div>
+
+                <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                    <h3 class="text-md font-semibold mb-4 text-slate-700">Nuevo usuario</h3>
+
+                    <form id="form-crear-usuario" onsubmit="guardarUsuario(event)" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">Nombre(s)</label>
+                            <input type="text" id="nombre" required placeholder="GIOVANNY" class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-800">
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">Apellidos</label>
+                            <input type="text" id="apellidos" required placeholder="RAMOS" class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-800">
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">Teléfono (WhatsApp)</label>
+                            <input type="tel" id="telefono" required placeholder="9513025072" class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-800">
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">Cargo / Rol</label>
+                            <select id="cargo" required class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-800">
+                                <option value="Director">Director</option>
+                                <option value="Presidente">Presidente</option>
+                                <option value="Secretario">Secretario</option>
+                                <option value="Tesorero">Tesorero</option>
+                                <option value="Vocal">Vocal</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">Comité asignado</label>
+                            <select id="comite_id" class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-800">
+                                <option value="">Sin comité</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">Código o Nivel</label>
+                            <input type="text" id="nivel" value="0" class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-800">
+                        </div>
+
+                        <div class="md:col-span-2 mt-2">
+                            <button type="submit" class="bg-slate-900 hover:bg-slate-800 text-white font-medium px-6 py-2 rounded text-sm transition">
+                                Crear usuario
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </section>
+
+        <!-- SECCIÓN: COMITÉS -->
+        <section id="sec-comites" class="hidden">
+            <div class="bg-white p-6 rounded-lg shadow-md border border-gray-200 max-w-3xl mx-auto">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-xl font-bold text-slate-800">Gestión de Comités</h2>
+                    <button onclick="inicializarComitesPredeterminados()" class="bg-green-700 hover:bg-green-800 text-white text-xs px-3 py-2 rounded transition">
+                        + Insertar Comités Base
+                    </button>
+                </div>
+
+                <div id="lista-comites-contenedor" class="space-y-2">
+                    <!-- Los comités se renderizarán dinámicamente aquí -->
+                    <p class="text-gray-500 text-sm italic">Cargando comités...</p>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- SCRIPT DE CONFIGURACIÓN Y LÓGICA -->
+    <script>
+        // --- CONFIGURACIÓN DE SUPABASE ---
+        // Reemplaza estas dos constantes con tus credenciales reales de Supabase
+        const SUPABASE_URL = "https://TU_PROYECTO_SUPABASE.supabase.co";
+        const SUPABASE_KEY = "TU_KEY_PUBLICA_ANON_SUPABASE";
         
-        if (error) {
-          msg.innerHTML = errBox("Error de autenticación: " + error.message);
-          return;
+        const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        // --- NAVEGACIÓN POR PESTAÑAS ---
+        function cambiarTab(tab) {
+            ['inicio', 'usuarios', 'comites'].forEach(t => {
+                document.getElementById(`sec-${t}`).classList.add('hidden');
+                document.getElementById(`tab-${t}-btn`).className = 'px-4 py-2 text-sm font-semibold rounded-md bg-gray-200 text-gray-700 hover:bg-gray-300';
+            });
+
+            document.getElementById(`sec-${tab}`).classList.remove('hidden');
+            document.getElementById(`tab-${tab}-btn`).className = 'px-4 py-2 text-sm font-semibold rounded-md bg-slate-900 text-white';
         }
 
-        if (!data || data.length === 0) {
-          msg.innerHTML = errBox("Credenciales incorrectas o usuario inactivo.");
-          return;
+        // --- CARGAR COMITÉS DESDE SUPABASE ---
+        async function cargarComites() {
+            try {
+                const { data: comites, error } = await db
+                    .from('comites')
+                    .select('*')
+                    .order('id', { ascending: true });
+
+                if (error) throw error;
+
+                const selectComite = document.getElementById('comite_id');
+                const contenedorLista = document.getElementById('lista-comites-contenedor');
+
+                // Limpiar selects y contenedor
+                selectComite.innerHTML = '<option value="">Sin comité</option>';
+                contenedorLista.innerHTML = '';
+
+                if (!comites || comites.length === 0) {
+                    contenedorLista.innerHTML = '<p class="text-gray-500 text-sm italic">No hay comités registrados.</p>';
+                    return;
+                }
+
+                comites.forEach(c => {
+                    // Llenar select del formulario
+                    const opt = document.createElement('option');
+                    opt.value = c.id;
+                    opt.textContent = c.nombre;
+                    selectComite.appendChild(opt);
+
+                    // Llenar lista en pestaña Comités
+                    const item = document.createElement('div');
+                    item.className = 'p-3 bg-gray-50 rounded border border-gray-200 text-sm font-medium text-gray-800 flex justify-between items-center';
+                    item.innerHTML = `<span>${c.nombre}</span> <span class="text-xs bg-slate-200 px-2 py-1 rounded text-slate-700">ID: ${c.id}</span>`;
+                    contenedorLista.appendChild(item);
+                });
+
+            } catch (err) {
+                console.error("Error al cargar comités:", err.message);
+            }
         }
 
-        state.usuario = data[0];
-        localStorage.setItem('usuario_sesion', JSON.stringify(state.usuario));
-        actualizarHeader();
-        await cargarComites();
-        renderApp();
-      });
-    }
+        // --- INSERTAR COMITÉS BASE SI LA TABLA ESTÁ VACÍA ---
+        async function inicializarComitesPredeterminados() {
+            const comitesBase = [
+                { nombre: 'PADRES DE FAMILIA' },
+                { nombre: 'PARCELA' },
+                { nombre: 'LA ESCUELA ES NUESTRA' }
+            ];
 
-    // ==========================================
-    // RECUPERACIÓN DE CONTRASEÑA
-    // ==========================================
-    function renderSolicitudRecuperacion() {
-      const app = document.getElementById("app");
-      app.innerHTML = `
-        <div class="max-w-sm mx-auto bg-white p-6 rounded-xl shadow-md border mt-10" style="border-color:#E1DED5">
-          <h2 class="text-xl font-bold text-center mb-2" style="color:#1B365D">Recuperar Contraseña</h2>
-          <p class="text-xs text-gray-500 text-center mb-4">Ingresa tu usuario para gestionar la restauración.</p>
-          <div id="recMsg"></div>
-          <div class="space-y-3">
-            <div>
-              <label class="block text-xs font-semibold mb-1 text-gray-600">Usuario</label>
-              <input id="recUsuario" type="text" class="w-full px-3 py-2 border rounded-lg text-sm outline-none" style="border-color:#E1DED5">
-            </div>
-            <button id="btnSolicitarRec" class="w-full py-2.5 rounded-lg text-white font-semibold text-sm transition shadow" style="background-color:#1B365D">
-              Enviar solicitud
-            </button>
-            <div class="text-center">
-              <button onclick="renderLogin()" class="text-xs text-gray-600 hover:underline">
-                Volver al inicio de sesión
-              </button>
-            </div>
-          </div>
-        </div>
-      `;
-
-      document.getElementById("btnSolicitarRec").addEventListener("click", async () => {
-        const msg = document.getElementById("recMsg");
-        msg.innerHTML = "";
-        const u = document.getElementById("recUsuario").value.trim();
-
-        if (!u) {
-          msg.innerHTML = errBox("Ingresa tu nombre de usuario.");
-          return;
+            const { error } = await db.from('comites').upsert(comitesBase, { onConflict: 'nombre' });
+            
+            if (error) {
+                alert("Error al guardar comités: " + error.message);
+            } else {
+                alert("¡Comités predeterminados guardados con éxito!");
+                cargarComites();
+            }
         }
 
-        if (u.toLowerCase() === 'reybautista10') {
-          const { data, error } = await sb.rpc("recuperar_super_admin", { 
-            p_usuario: u, 
-            p_email: 'rdavid1229@hotmail.com' 
-          });
+        // --- GUARDAR USUARIO Y GENERAR ENLACE WHATSAPP DIRECTO ---
+        async function guardarUsuario(event) {
+            event.preventDefault();
 
-          if (error) {
-            msg.innerHTML = errBox(error.message);
-            return;
-          }
+            const nombre = document.getElementById('nombre').value.trim();
+            const apellidos = document.getElementById('apellidos').value.trim();
+            const telefono = document.getElementById('telefono').value.trim();
+            const cargo = document.getElementById('cargo').value;
+            const comite_id = document.getElementById('comite_id').value || null;
+            const nivel = document.getElementById('nivel').value;
 
-          msg.innerHTML = okBox(`Enlace generado. <a href="${data[0].link_activacion}" class="underline font-bold">Haz clic aquí para restablecer contraseña</a>`);
-        } else {
-          const { error } = await sb.rpc("solicitar_recuperacion", { p_usuario: u });
-          if (error) {
-            msg.innerHTML = errBox(error.message);
-            return;
-          }
-          msg.innerHTML = okBox("Solicitud enviada. El administrador te enviará tu enlace por WhatsApp.");
-        }
-      });
-    }
+            // Generar token único para el usuario
+            const tokenActivacion = "ACT-" + Math.floor(100000 + Math.random() * 900000);
 
-    // ==========================================
-    // ACTIVACIÓN
-    // ==========================================
-    function renderFormularioActivacion(token) {
-      const app = document.getElementById("app");
-      app.innerHTML = `
-        <div class="max-w-sm mx-auto bg-white p-6 rounded-xl shadow-md border mt-10" style="border-color:#E1DED5">
-          <h2 class="text-xl font-bold text-center mb-2" style="color:#1B365D">Crear tu contraseña</h2>
-          <p class="text-xs text-gray-500 text-center mb-4">Establece tu contraseña de acceso para continuar.</p>
-          <div id="actMsg"></div>
-          <div class="space-y-3">
-            <div>
-              <label class="block text-xs font-semibold mb-1 text-gray-600">Nueva contraseña</label>
-              <input id="actPass1" type="password" class="w-full px-3 py-2 border rounded-lg text-sm outline-none" style="border-color:#E1DED5">
-            </div>
-            <div>
-              <label class="block text-xs font-semibold mb-1 text-gray-600">Confirmar contraseña</label>
-              <input id="actPass2" type="password" class="w-full px-3 py-2 border rounded-lg text-sm outline-none" style="border-color:#E1DED5">
-            </div>
-            <button id="btnGuardarPass" class="w-full py-2.5 rounded-lg text-white font-semibold text-sm transition shadow" style="background-color:#1B365D">
-              Guardar contraseña
-            </button>
-          </div>
-        </div>
-      `;
+            try {
+                // Insertar en la base de datos
+                const { data, error } = await db.from('usuarios').insert([
+                    {
+                        nombre: nombre,
+                        apellidos: apellidos,
+                        telefono: telefono,
+                        cargo: cargo,
+                        comite_id: comite_id,
+                        nivel: nivel,
+                        token_activacion: tokenActivacion
+                    }
+                ]);
 
-      document.getElementById("btnGuardarPass").addEventListener("click", async () => {
-        const msg = document.getElementById("actMsg");
-        msg.innerHTML = "";
-        const p1 = document.getElementById("actPass1").value;
-        const p2 = document.getElementById("actPass2").value;
+                if (error) throw error;
 
-        if (!p1 || !p2) {
-          msg.innerHTML = errBox("Llena ambos campos.");
-          return;
-        }
+                // Formatear el número de teléfono con la clave de país de México (52) si no la incluye
+                let numLada = telefono.replace(/\D/g, '');
+                if (numLada.length === 10) {
+                    numLada = '52' + numLada;
+                }
 
-        if (p1 !== p2) {
-          msg.innerHTML = errBox("Las contraseñas no coinciden.");
-          return;
-        }
+                // Generar mensaje prellenado para WhatsApp
+                const textoMensaje = encodeURIComponent(
+                    `¡Hola ${nombre} ${apellidos}!\n` +
+                    `Se ha registrado tu cuenta como *${cargo}* en el Sistema de Comités Escolares.\n\n` +
+                    `Tu código de activación es: *${tokenActivacion}*`
+                );
 
-        const { data, error } = await sb.rpc("activar_cuenta", { p_token: token, p_password: p1 });
-        if (error) {
-          msg.innerHTML = errBox(error.message);
-          return;
+                // Enlace directo oficial de la API de WhatsApp
+                const enlaceWhatsApp = `https://wa.me/${numLada}?text=${textoMensaje}`;
+
+                // Mostrar alerta con el botón directo de envío
+                const alertaContenedor = document.getElementById('alerta-contenedor');
+                alertaContenedor.className = 'p-4 rounded-lg bg-green-100 border border-green-300 text-green-900 text-sm space-y-2';
+                alertaContenedor.innerHTML = `
+                    <p class="font-semibold">✓ Usuario creado con éxito.</p>
+                    <p class="text-xs">Haz clic abajo para enviar el mensaje de activación directamente por WhatsApp:</p>
+                    <a href="${enlaceWhatsApp}" target="_blank" class="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-4 py-2 rounded shadow transition">
+                        <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946.003-6.556 5.338-11.891 11.893-11.891 3.181.001 6.167 1.24 8.413 3.488 2.245 2.248 3.481 5.236 3.48 8.414-.003 6.557-5.338 11.892-11.893 11.892-1.99-.001-3.951-.5-5.688-1.448l-6.305 1.654zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884-.001 2.225.651 3.891 1.746 5.634l-.999 3.648 3.742-.981z"/></a`;
+                alertaContenedor.classList.remove('hidden');
+
+                // Limpiar el formulario
+                document.getElementById('form-crear-usuario').reset();
+
+            } catch (err) {
+                const alertaContenedor = document.getElementById('alerta-contenedor');
+                alertaContenedor.className = 'p-3 rounded-lg bg-red-100 border border-red-300 text-red-800 text-sm';
+                alertaContenedor.textContent = "Error: " + err.message;
+                alertaContenedor.classList.remove('hidden');
+            }
         }
 
-        msg.innerHTML = okBox("¡Contraseña guardada con éxito! Redirigiendo al inicio...");
-        setTimeout(() => {
-          window.location.href = window.location.pathname;
-        }, 1500);
-      });
-    }
-
-    // ==========================================
-    // VISTAS DEL DASHBOARD
-    // ==========================================
-    function renderApp() {
-      const app = document.getElementById("app");
-      app.innerHTML = `
-        <nav class="flex space-x-2 border-b pb-2 mb-4 overflow-x-auto text-sm font-semibold" style="border-color:#E1DED5">
-          <button onclick="cambiarVista('inicio')" class="px-3 py-1.5 rounded-lg transition ${state.vista === 'inicio' ? 'bg-blue-900 text-white' : 'bg-gray-200 text-gray-700'}">Inicio</button>
-          <button onclick="cambiarVista('usuarios')" class="px-3 py-1.5 rounded-lg transition ${state.vista === 'usuarios' ? 'bg-blue-900 text-white' : 'bg-gray-200 text-gray-700'}">Usuarios</button>
-          <button onclick="cambiarVista('comites')" class="px-3 py-1.5 rounded-lg transition ${state.vista === 'comites' ? 'bg-blue-900 text-white' : 'bg-gray-200 text-gray-700'}">Comités</button>
-        </nav>
-        <div id="mainContent"></div>
-      `;
-
-      const main = document.getElementById("mainContent");
-      if (state.vista === 'inicio') main.innerHTML = `<h3 class="text-lg font-bold" style="color:#1B365D">Bienvenido, ${state.usuario.nombre_completo}</h3>`;
-      else if (state.vista === 'usuarios') renderUsuarios(main);
-      else if (state.vista === 'comites') renderComites(main);
-    }
-
-    async function cambiarVista(v) {
-      state.vista = v;
-      if (v === 'usuarios' || v === 'comites') {
-        await cargarComites();
-      }
-      renderApp();
-    }
-
-    function renderUsuarios(main) {
-      let comiteOptions = `<option value="">Sin comité</option>`;
-      comitesLista.forEach(c => {
-        comiteOptions += `<option value="${c.id}">${c.nombre}</option>`;
-      });
-
-      main.innerHTML = `
-        <h3 class="text-lg font-bold mb-3" style="color:#1B365D">Usuarios</h3>
-        <div class="bg-white p-4 rounded-xl shadow-sm border mb-6" style="border-color:#E1DED5">
-          <h4 class="text-sm font-bold mb-3" style="color:#1B365D">Nuevo usuario</h4>
-          <div id="nuMsg"></div>
-          <div class="grid grid-cols-2 gap-2 mb-2">
-            <input id="nuUsuario" placeholder="Usuario (login)" class="px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
-            <input id="nuNombre" placeholder="Nombre completo" class="px-2 py-1.5 rounded-lg text-sm outline-none border uppercase" style="border-color:#E1DED5" />
-          </div>
-          <div class="grid grid-cols-2 gap-2 mb-2">
-            <input id="nuTelefono" placeholder="Teléfono (WhatsApp)" class="px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
-            <select id="nuRol" onchange="actualizarCamposPorRol('nu')" class="px-2 py-1.5 rounded-lg text-sm outline-none border bg-white" style="border-color:#E1DED5">
-              <option value="Director">Director</option>
-              <option value="Presidente">Presidente</option>
-              <option value="Tesorero">Tesorero</option>
-            </select>
-          </div>
-          <div class="grid grid-cols-2 gap-2 mb-3">
-            <select id="nuComite" onchange="actualizarCamposPorRol('nu')" class="px-2 py-1.5 rounded-lg text-sm outline-none border bg-white" style="border-color:#E1DED5">
-              ${comiteOptions}
-            </select>
-            <input id="nuSaldoCaja" type="number" placeholder="Saldo inicial caja chica" class="px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
-          </div>
-          <div id="nuAcreimexWrap" class="mb-3 hidden">
-            <input id="nuSaldoAcreimex" type="number" placeholder="Saldo inicial cuenta Acreimex" class="w-full px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
-          </div>
-          <button id="nuGuardarBtn" class="px-4 py-2 rounded-lg text-white font-semibold text-sm transition shadow" style="background-color:#1B365D">
-            Crear usuario
-          </button>
-        </div>
-      `;
-
-      actualizarCamposPorRol('nu');
-
-      document.getElementById("nuNombre").addEventListener("input", (e) => {
-        e.target.value = e.target.value
-          .normalize("NFD")
-          .replace(/[\u0300-\u036f]/g, "")
-          .toUpperCase()
-          .replace(/[^A-Z0-9 ]/g, "");
-      });
-
-      document.getElementById("nuGuardarBtn").addEventListener("click", async () => {
-        const msg = document.getElementById("nuMsg");
-        msg.innerHTML = "";
-
-        const usuario = document.getElementById("nuUsuario").value.trim();
-        const nombre = document.getElementById("nuNombre").value.trim();
-        const telefono = document.getElementById("nuTelefono").value.trim();
-        const rol = document.getElementById("nuRol").value;
-        const comiteId = document.getElementById("nuComite").value || null;
-
-        if (!usuario || !nombre || !telefono) {
-          msg.innerHTML = errBox("Completa los campos obligatorios.");
-          return;
+        function cerrarSesion() {
+            alert("Sesión cerrada");
         }
 
-        const { data, error } = await sb.rpc("usuario_crear", {
-          p_usuario: usuario,
-          p_nombre_completo: nombre,
-          p_telefono: telefono,
-          p_rol: rol,
-          p_comite_id: comiteId
-        });
-
-        if (error) {
-          msg.innerHTML = errBox(error.message);
-          return;
-        }
-
-        const link = data[0].link_activacion;
-
-        msg.innerHTML = okBox(`
-          Usuario creado con éxito.<br>
-          <b>Enlace de activación (WhatsApp):</b><br>
-          <a href="${link}" target="_blank" class="underline font-mono text-xs break-all">${link}</a>
-        `);
-      });
-    }
-
-    function renderComites(main) {
-      let comitesHtml = comitesLista.map(c => `
-        <div class="bg-white p-3 rounded-lg border mb-2" style="border-color:#E1DED5">
-          <p class="font-bold text-sm" style="color:#1B365D">${c.nombre}</p>
-        </div>
-      `).join('');
-
-      main.innerHTML = `
-        <h3 class="text-lg font-bold mb-3" style="color:#1B365D">Gestión de Comités</h3>
-        ${comitesHtml || '<p class="text-xs text-gray-500">No hay comités registrados.</p>'}
-      `;
-    }
-
-    function actualizarCamposPorRol(prefijo) {
-      const rol = document.getElementById(`${prefijo}Rol`).value;
-      const comiteSel = document.getElementById(`${prefijo}Comite`);
-      const saldoCajaInput = document.getElementById(`${prefijo}SaldoCaja`);
-      const comiteId = comiteSel.value;
-      const comite = comitesLista.find(c => c.id === comiteId);
-      const wrapAcreimex = document.getElementById(`${prefijo}AcreimexWrap`);
-
-      const esAdministrativo = (rol === "Director" || rol === "Super Administrador");
-
-      if (esAdministrativo) {
-        comiteSel.value = "";
-        comiteSel.disabled = true;
-        if (saldoCajaInput) {
-          saldoCajaInput.value = "0";
-          saldoCajaInput.disabled = true;
-        }
-      } else {
-        comiteSel.disabled = false;
-        if (saldoCajaInput) {
-          saldoCajaInput.disabled = false;
-        }
-      }
-
-      const esTesoreroPadres = (rol === "Tesorero") && comite && (comite.nombre === "PADRES DE FAMILIA");
-
-      if (wrapAcreimex) {
-        wrapAcreimex.style.display = esTesoreroPadres ? "block" : "none";
-      }
-    }
-  </script>
+        // Ejecutar carga de comités al abrir la página
+        window.addEventListener('DOMContentLoaded', cargarComites);
+    </script>
 </body>
 </html>
