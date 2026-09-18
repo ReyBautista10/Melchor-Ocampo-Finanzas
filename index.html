@@ -34,6 +34,27 @@ const app = document.getElementById("app");
 function errBox(t) { return `<div class="text-xs mb-3 p-2 rounded-lg" style="background:#F5E4E1; color:#B5453A">${t}</div>`; }
 function okBox(t) { return `<div class="text-xs mb-3 p-2 rounded-lg" style="background:#E6F0EA; color:#3F7A5E">${t}</div>`; }
 
+// Usuario (login): solo letras y números, sin espacios ni caracteres especiales
+function filtrarUsuarioLogin(valor) {
+  return valor.replace(/[^A-Za-z0-9]/g, "");
+}
+// Nombre completo: mayúsculas, sin acentos ni signos de puntuación, espacios sí permitidos
+function filtrarNombreCompleto(valor) {
+  const sinAcentos = valor.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return sinAcentos.toUpperCase().replace(/[^A-Z ]/g, "");
+}
+function aplicarFiltroEnVivo(elId, filtro) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  el.addEventListener("input", () => {
+    const cursor = el.selectionStart;
+    const antes = el.value.length;
+    el.value = filtro(el.value);
+    const despues = el.value.length;
+    el.setSelectionRange(cursor - (antes - despues), cursor - (antes - despues));
+  });
+}
+
 // ============================================================
 // Arranque
 // ============================================================
@@ -240,6 +261,7 @@ async function renderUsuarios(main) {
     const comiteId = comiteSel.value;
     const comite = comitesLista.find(c => c.id === comiteId);
     const wrapAcreimex = document.getElementById(`${prefijo}AcreimexWrap`);
+    const wrapCaja = document.getElementById(`${prefijo}CajaWrap`);
 
     if (rol === "Director") {
       comiteSel.value = "";
@@ -248,9 +270,14 @@ async function renderUsuarios(main) {
       comiteSel.disabled = false;
     }
 
+    if (wrapCaja) wrapCaja.style.display = rol === "Director" ? "none" : "block";
+
     const puedeAcreimex = rol === "Tesorero" && comite && comite.maneja_acreimex;
     wrapAcreimex.style.display = puedeAcreimex ? "block" : "none";
-    if (!puedeAcreimex) document.getElementById(`${prefijo}SaldoAcreimex`).value = "";
+    if (!puedeAcreimex) {
+      const elSaldoAcreimex = document.getElementById(`${prefijo}SaldoAcreimex`);
+      if (elSaldoAcreimex) elSaldoAcreimex.value = "";
+    }
   }
 
   main.innerHTML = `
@@ -274,7 +301,9 @@ async function renderUsuarios(main) {
           <select id="nuComite" class="px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5">
             ${comiteOptionsHtml(null)}
           </select>
-          <input id="nuSaldoCaja" type="number" step="0.01" placeholder="Saldo inicial caja chica" class="px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
+          <div id="nuCajaWrap">
+            <input id="nuSaldoCaja" type="number" step="0.01" placeholder="Saldo inicial caja chica" class="w-full px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
+          </div>
         </div>
         <div id="nuAcreimexWrap" style="display:none" class="mb-2">
           <input id="nuSaldoAcreimex" type="number" step="0.01" placeholder="Saldo inicial cuenta Acreimex" class="w-full px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
@@ -302,6 +331,8 @@ async function renderUsuarios(main) {
   document.getElementById("nuRol").addEventListener("change", () => actualizarCamposPorRol("nu"));
   document.getElementById("nuComite").addEventListener("change", () => actualizarCamposPorRol("nu"));
   actualizarCamposPorRol("nu");
+  aplicarFiltroEnVivo("nuUsuario", filtrarUsuarioLogin);
+  aplicarFiltroEnVivo("nuNombre", filtrarNombreCompleto);
 
   document.getElementById("nuGuardarBtn").addEventListener("click", async () => {
     const msg = document.getElementById("nuMsg");
@@ -376,6 +407,7 @@ async function renderUsuarios(main) {
     elFalsoSaldo.id = `${prefijo}SaldoAcreimex`;
     wrap.appendChild(elFalsoSaldo);
     actualizarCamposPorRol(prefijo);
+    aplicarFiltroEnVivo(`${prefijo}Nombre`, filtrarNombreCompleto);
 
     document.getElementById(`${prefijo}GuardarBtn`).addEventListener("click", async () => {
       const msg = document.getElementById(`${prefijo}Msg`);
@@ -441,6 +473,8 @@ async function renderComites(main) {
           </div>`).join("")}
       </div>
     </div>`;
+
+  aplicarFiltroEnVivo("ncNombre", (v) => v.toUpperCase());
 
   document.getElementById("ncGuardarBtn").addEventListener("click", async () => {
     const nombre = document.getElementById("ncNombre").value.trim();
