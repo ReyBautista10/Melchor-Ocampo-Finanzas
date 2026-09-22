@@ -326,6 +326,7 @@ async function renderUsuarios(main) {
                 <p class="text-xs" style="color:#6C7B8A">${u.rol}${u.comite_nombre ? " · " + u.comite_nombre : ""} · Tel: ${u.telefono}${!u.tiene_password ? " · ⏳ Pendiente de activar" : ""}${!u.activo ? " · INACTIVO" : ""}</p>
               </button>
               <button class="uEstadoBtn px-2 py-1 rounded-lg text-xs font-semibold" data-id="${u.id}" data-activo="${u.activo}" style="background:${u.activo ? "#F5E4E1" : "#E6F0EA"}; color:${u.activo ? "#B5453A" : "#3F7A5E"}">${u.activo ? "Inhabilitar" : "Reactivar"}</button>
+              <button class="uEliminarBtn px-2 py-1 rounded-lg text-xs font-semibold" data-id="${u.id}" data-nombre="${u.nombre_completo}" style="background:#F5E4E1; color:#B5453A">Eliminar</button>
             </div>
             <div id="uEditWrap${i}"></div>
           </div>`).join("")}
@@ -371,6 +372,14 @@ async function renderUsuarios(main) {
   main.querySelectorAll(".uEstadoBtn").forEach(b => b.addEventListener("click", async () => {
     const activo = b.dataset.activo === "true";
     const { error } = await sb.rpc("usuario_cambiar_estado", { p_solicitante_id: state.usuario.id, p_usuario_id: b.dataset.id, p_activo: !activo });
+    if (error) { alert(error.message); return; }
+    renderUsuarios(main);
+  }));
+
+  main.querySelectorAll(".uEliminarBtn").forEach(b => b.addEventListener("click", async () => {
+    const confirmar = confirm(`¿Eliminar a ${b.dataset.nombre} de la lista? No se borra de la base de datos, solo se oculta (sigue disponible para reportes).`);
+    if (!confirmar) return;
+    const { error } = await sb.rpc("usuario_eliminar", { p_solicitante_id: state.usuario.id, p_usuario_id: b.dataset.id });
     if (error) { alert(error.message); return; }
     renderUsuarios(main);
   }));
