@@ -159,22 +159,80 @@ function renderOlvidePassword() {
 // ============================================================
 // Establecer contraseña (activación o recuperación, vía ?token=)
 // ============================================================
-function renderEstablecerPassword(token) {
+async function renderEstablecerPassword(token) {
+  app.innerHTML = `<div class="min-h-screen flex items-center justify-center p-5"><p class="text-sm" style="color:#6C7B8A">Cargando…</p></div>`;
+
+  const { data, error } = await sb.rpc("token_info_obtener", { p_token: token });
+  if (error || !data || !data[0] || !data[0].valido) {
+    app.innerHTML = `
+      <div class="min-h-screen flex items-center justify-center p-5">
+        <div class="w-full max-w-sm p-6 rounded-2xl bg-white border text-center" style="border-color:#E1DED5">
+          ${errBox("Este link no es válido o ya expiró. Pide uno nuevo.")}
+        </div>
+      </div>`;
+    return;
+  }
+
+  const info = data[0];
+  const saludoRol = info.comite_nombre ? `${info.rol} de ${info.comite_nombre}` : info.rol;
+
+  function evaluar(pass, confirmar) {
+    return {
+      mayuscula: /[A-Z]/.test(pass),
+      minuscula: /[a-z]/.test(pass),
+      numero: /[0-9]/.test(pass),
+      especial: /[^A-Za-z0-9]/.test(pass),
+      longitud: pass.length >= 8,
+      coinciden: pass.length > 0 && pass === confirmar,
+    };
+  }
+
+  function itemHtml(id, texto, cumple) {
+    return `<li id="${id}" class="text-xs" style="color:${cumple ? "#3F7A5E" : "#6C7B8A"}">${cumple ? "✓" : "○"} ${texto}</li>`;
+  }
+
+  function pintarChecklist(estado) {
+    document.getElementById("checkMayuscula").outerHTML = itemHtml("checkMayuscula", "Mayúscula", estado.mayuscula);
+    document.getElementById("checkMinuscula").outerHTML = itemHtml("checkMinuscula", "Minúscula", estado.minuscula);
+    document.getElementById("checkNumero").outerHTML = itemHtml("checkNumero", "Número", estado.numero);
+    document.getElementById("checkEspecial").outerHTML = itemHtml("checkEspecial", "Carácter especial (@#$_&-...)", estado.especial);
+    document.getElementById("checkLongitud").outerHTML = itemHtml("checkLongitud", "Mínimo 8 caracteres", estado.longitud);
+    document.getElementById("checkCoinciden").outerHTML = itemHtml("checkCoinciden", "Las contraseñas coinciden", estado.coinciden);
+  }
+
   app.innerHTML = `
     <div class="min-h-screen flex items-center justify-center p-5">
       <div class="w-full max-w-sm p-6 rounded-2xl bg-white border" style="border-color:#E1DED5">
-        <div class="text-center mb-6">
-          <div class="text-lg font-semibold" style="color:${COLOR}">Crear tu contraseña</div>
-          <div class="text-xs mt-1" style="color:#6C7B8A">Mínimo 8 caracteres, con mayúscula, minúscula, número y carácter especial.</div>
+        <div class="text-center mb-4">
+          <div class="text-base" style="color:#6C7B8A">Bienvenido/a</div>
+          <div class="text-lg font-bold" style="color:${COLOR}">${info.nombre_completo}</div>
+          <div class="text-xs" style="color:#6C7B8A">${saludoRol}</div>
         </div>
+        <p class="text-sm font-semibold mb-3 text-center" style="color:${COLOR}">Crea tu contraseña</p>
         <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Nueva contraseña</label>
         <input id="estNueva" type="password" class="w-full px-3 py-2 rounded-lg text-sm mb-3 outline-none border" style="border-color:#E1DED5" />
         <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Confirmar contraseña</label>
-        <input id="estConfirmar" type="password" class="w-full px-3 py-2 rounded-lg text-sm mb-4 outline-none border" style="border-color:#E1DED5" />
+        <input id="estConfirmar" type="password" class="w-full px-3 py-2 rounded-lg text-sm mb-3 outline-none border" style="border-color:#E1DED5" />
+        <ul class="mb-4 space-y-1">
+          <li id="checkMayuscula"></li>
+          <li id="checkMinuscula"></li>
+          <li id="checkNumero"></li>
+          <li id="checkEspecial"></li>
+          <li id="checkLongitud"></li>
+          <li id="checkCoinciden"></li>
+        </ul>
         <div id="estMsg"></div>
         <button id="estGuardarBtn" class="w-full py-2.5 rounded-lg text-sm font-bold text-white" style="background:${COLOR}">Guardar contraseña</button>
       </div>
     </div>`;
+
+  pintarChecklist(evaluar("", ""));
+
+  function actualizar() {
+    pintarChecklist(evaluar(document.getElementById("estNueva").value, document.getElementById("estConfirmar").value));
+  }
+  document.getElementById("estNueva").addEventListener("input", actualizar);
+  document.getElementById("estConfirmar").addEventListener("input", actualizar);
 
   document.getElementById("estGuardarBtn").addEventListener("click", async () => {
     const nueva = document.getElementById("estNueva").value;
@@ -183,8 +241,8 @@ function renderEstablecerPassword(token) {
     msg.innerHTML = "";
     if (nueva !== confirmar) { msg.innerHTML = errBox("Las contraseñas no coinciden."); return; }
 
-    const { error } = await sb.rpc("password_establecer", { p_token: token, p_password_nueva: nueva });
-    if (error) { msg.innerHTML = errBox(error.message); return; }
+    const { error: errGuardar } = await sb.rpc("password_establecer", { p_token: token, p_password_nueva: nueva });
+    if (errGuardar) { msg.innerHTML = errBox(errGuardar.message); return; }
 
     msg.innerHTML = okBox("Contraseña creada. Ya puedes entrar.");
     setTimeout(() => { window.location.href = window.location.pathname; }, 1500);
@@ -346,26 +404,89 @@ async function renderUsuarios(main) {
     const usuario = document.getElementById("nuUsuario").value.trim();
     const nombre = document.getElementById("nuNombre").value.trim();
     const telefono = document.getElementById("nuTelefono").value.trim();
+    const rol = document.getElementById("nuRol").value;
+    const comiteId = document.getElementById("nuComite").value || null;
+    const saldoCaja = Number(document.getElementById("nuSaldoCaja").value) || 0;
+    const saldoAcreimex = document.getElementById("nuSaldoAcreimex").value ? Number(document.getElementById("nuSaldoAcreimex").value) : null;
     if (!usuario || !nombre || !telefono) { msg.innerHTML = errBox("Completa usuario, nombre y teléfono."); return; }
 
+    function limpiarFormulario() {
+      document.getElementById("nuUsuario").value = "";
+      document.getElementById("nuNombre").value = "";
+      document.getElementById("nuTelefono").value = "";
+      document.getElementById("nuSaldoCaja").value = "";
+      document.getElementById("nuSaldoAcreimex").value = "";
+    }
+
+    function mostrarLinkGenerado(token) {
+      const link = `${window.location.origin}${window.location.pathname}?token=${token}`;
+      document.getElementById("tokenGeneradoWrap").innerHTML = `
+        <div class="p-4 rounded-xl mt-3" style="background:#E6F0EA; border:1px solid #3F7A5E">
+          <p class="text-sm font-semibold mb-1" style="color:${COLOR}">Listo. Comparte este link por WhatsApp:</p>
+          <p class="text-xs break-all" style="color:#1C2B3A">${link}</p>
+        </div>`;
+    }
+
+    // Paso 1: ver si ese usuario ya existe en la base de datos (aunque esté
+    // inactivo o eliminado)
+    const { data: existeData, error: errExiste } = await sb.rpc("usuario_verificar_existente", { p_usuario: usuario });
+    if (errExiste) { msg.innerHTML = errBox(errExiste.message); return; }
+    const info = existeData && existeData[0];
+
+    if (info && info.existe) {
+      if (info.activo && !info.eliminado) {
+        msg.innerHTML = errBox("Ya existe un usuario con ese nombre.");
+        return;
+      }
+
+      const quiereReactivar = confirm(
+        `Ya existe un usuario "${usuario}" (inactivo o eliminado), registrado antes como ${info.rol}${info.comite_nombre ? " de " + info.comite_nombre : ""}.\n\n¿Deseas reactivarlo?`
+      );
+      if (!quiereReactivar) {
+        limpiarFormulario();
+        return;
+      }
+
+      const { data: reactivado, error: errReact } = await sb.rpc("usuario_reactivar_con_datos", {
+        p_solicitante_id: state.usuario.id,
+        p_usuario_existente_id: info.id,
+        p_nombre_completo: nombre,
+        p_telefono: telefono,
+        p_rol: rol,
+        p_comite_id: comiteId,
+        p_saldo_inicial_caja: saldoCaja,
+        p_saldo_inicial_acreimex: saldoAcreimex,
+      });
+
+      if (errReact) {
+        const quiereDiferente = confirm(
+          `${errReact.message}\n\n¿Deseas asignarle un rol y/o comité diferente? Cámbialo arriba en el formulario y presiona "Crear usuario" de nuevo.`
+        );
+        if (!quiereDiferente) {
+          msg.innerHTML = errBox("No es posible activarlo, ya que no se pueden duplicar roles de comité.");
+        }
+        return;
+      }
+
+      mostrarLinkGenerado(reactivado[0].token_activacion);
+      renderUsuarios(main);
+      return;
+    }
+
+    // Paso 2: no existía -> alta normal
     const { data, error } = await sb.rpc("usuario_crear", {
       p_creado_por: state.usuario.id,
       p_usuario: usuario,
       p_nombre_completo: nombre,
       p_telefono: telefono,
-      p_rol: document.getElementById("nuRol").value,
-      p_comite_id: document.getElementById("nuComite").value || null,
-      p_saldo_inicial_caja: Number(document.getElementById("nuSaldoCaja").value) || 0,
-      p_saldo_inicial_acreimex: document.getElementById("nuSaldoAcreimex").value ? Number(document.getElementById("nuSaldoAcreimex").value) : null,
+      p_rol: rol,
+      p_comite_id: comiteId,
+      p_saldo_inicial_caja: saldoCaja,
+      p_saldo_inicial_acreimex: saldoAcreimex,
     });
     if (error) { msg.innerHTML = errBox(error.message); return; }
 
-    const link = `${window.location.origin}${window.location.pathname}?token=${data[0].token_activacion}`;
-    document.getElementById("tokenGeneradoWrap").innerHTML = `
-      <div class="p-4 rounded-xl mt-3" style="background:#E6F0EA; border:1px solid #3F7A5E">
-        <p class="text-sm font-semibold mb-1" style="color:${COLOR}">Usuario creado. Comparte este link por WhatsApp para que active su cuenta:</p>
-        <p class="text-xs break-all" style="color:#1C2B3A">${link}</p>
-      </div>`;
+    mostrarLinkGenerado(data[0].token_activacion);
     renderUsuarios(main);
   });
 
@@ -392,36 +513,12 @@ async function renderUsuarios(main) {
     const prefijo = `ed${b.dataset.idx}`;
     wrap.innerHTML = `
       <div class="mt-3 pt-3" style="border-top:1px solid #E1DED5">
-        <div class="grid grid-cols-2 gap-2 mb-2">
-          <input id="${prefijo}Nombre" value="${u.nombre_completo}" class="px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
-          <input id="${prefijo}Telefono" value="${u.telefono}" class="px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
-        </div>
-        <div class="grid grid-cols-2 gap-2 mb-2">
-          <select id="${prefijo}Rol" class="px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5">
-            <option value="Presidente" ${u.rol === "Presidente" ? "selected" : ""}>Presidente</option>
-            <option value="Tesorero" ${u.rol === "Tesorero" ? "selected" : ""}>Tesorero</option>
-            ${state.usuario.rol === "Super Administrador" ? `<option value="Director" ${u.rol === "Director" ? "selected" : ""}>Director</option>` : ""}
-          </select>
-          <select id="${prefijo}Comite" class="px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5">
-            ${comiteOptionsHtml(u.comite_id)}
-          </select>
-        </div>
-        <div id="${prefijo}AcreimexWrap" style="display:none" class="mb-2">
-          <p class="text-xs" style="color:#6C7B8A">Saldo Acreimex actual: $${u.saldo_acreimex ?? 0}</p>
-        </div>
+        <p class="text-xs mb-2" style="color:#6C7B8A">${u.rol}${u.comite_nombre ? " · " + u.comite_nombre : ""} — el rol y el comité ya no se pueden cambiar aquí (para no dejar huérfano el manejo del dinero); solo el teléfono.</p>
+        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Teléfono</label>
+        <input id="${prefijo}Telefono" value="${u.telefono}" class="w-full px-2 py-1.5 rounded-lg text-sm mb-2 outline-none border" style="border-color:#E1DED5" />
         <div id="${prefijo}Msg"></div>
         <button id="${prefijo}GuardarBtn" class="px-3 py-1.5 rounded-lg text-sm font-bold text-white" style="background:${COLOR}">Guardar cambios</button>
       </div>`;
-
-    document.getElementById(`${prefijo}Rol`).addEventListener("change", () => actualizarCamposPorRol(prefijo));
-    document.getElementById(`${prefijo}Comite`).addEventListener("change", () => actualizarCamposPorRol(prefijo));
-    // actualizarCamposPorRol espera un input de saldo con id `${prefijo}SaldoAcreimex`; aquí solo mostramos/ocultamos el bloque informativo
-    const elFalsoSaldo = document.createElement("input");
-    elFalsoSaldo.type = "hidden";
-    elFalsoSaldo.id = `${prefijo}SaldoAcreimex`;
-    wrap.appendChild(elFalsoSaldo);
-    actualizarCamposPorRol(prefijo);
-    aplicarFiltroEnVivo(`${prefijo}Nombre`, filtrarNombreCompleto);
 
     document.getElementById(`${prefijo}GuardarBtn`).addEventListener("click", async () => {
       const msg = document.getElementById(`${prefijo}Msg`);
@@ -429,10 +526,7 @@ async function renderUsuarios(main) {
       const { error } = await sb.rpc("usuario_modificar", {
         p_solicitante_id: state.usuario.id,
         p_usuario_id: u.id,
-        p_nombre_completo: document.getElementById(`${prefijo}Nombre`).value.trim(),
         p_telefono: document.getElementById(`${prefijo}Telefono`).value.trim(),
-        p_rol: document.getElementById(`${prefijo}Rol`).value,
-        p_comite_id: document.getElementById(`${prefijo}Comite`).value || null,
       });
       if (error) { msg.innerHTML = errBox(error.message); return; }
       renderUsuarios(main);
