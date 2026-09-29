@@ -257,11 +257,12 @@ const MENU = [
   { id: "usuarios", label: "Usuarios", roles: ["Super Administrador", "Director"] },
   { id: "comites", label: "Comités", roles: ["Super Administrador", "Director"] },
   { id: "solicitudes", label: "Solicitudes de recuperación", roles: ["Super Administrador", "Director"] },
-  { id: "logs", label: "Bitácora", roles: ["Super Administrador"] },
+  { id: "caja", label: "Mi caja", roles: ["Presidente", "Tesorero"] },
+  { id: "logs", label: "Bitácora", roles: ["Super Administrador", "Director"] },
 ];
 
 function renderApp(seccion) {
-  const activa = seccion || "inicio";
+  const activa = seccion || (["Presidente", "Tesorero"].includes(state.usuario.rol) ? "caja" : "inicio");
   const menuVisible = MENU.filter(m => m.roles.includes(state.usuario.rol));
 
   app.innerHTML = `
@@ -291,6 +292,7 @@ function renderApp(seccion) {
   if (activa === "usuarios") return renderUsuarios(main);
   if (activa === "comites") return renderComites(main);
   if (activa === "solicitudes") return renderSolicitudes(main);
+  if (activa === "caja") return renderCaja(main);
   if (activa === "logs") return renderLogs(main);
 }
 
@@ -669,6 +671,141 @@ async function renderSolicitudes(main) {
     b.textContent = "¡Copiado!";
     setTimeout(() => { b.textContent = "Copiar"; }, 1500);
   }));
+}
+
+// ============================================================
+// Mi caja (Presidente/Tesorero): entradas y salidas
+// ============================================================
+async function renderCaja(main) {
+  main.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Cargando…</p>`;
+
+  const [{ data: cuentaData, error: errCuenta }, { data: movsData, error: errMovs }] = await Promise.all([
+    sb.rpc("mi_cuenta_obtener", { p_usuario_id: state.usuario.id }),
+    sb.rpc("mis_movimientos_listar", { p_usuario_id: state.usuario.id }),
+  ]);
+  if (errCuenta) { main.innerHTML = errBox(errCuenta.message); return; }
+
+  const cuenta = cuentaData[0];
+  const movimientos = movsData || [];
+  const tieneAcreimex = cuenta.saldo_acreimex !== null;
+
+  function pintar() {
+    main.innerHTML = `
+      <h2 class="text-lg font-bold mb-4" style="color:${COLOR}">Mi caja</h2>
+      <div class="max-w-2xl">
+        <div class="grid ${tieneAcreimex ? "grid-cols-2" : "grid-cols-1"} gap-3 mb-4">
+          <div class="p-4 rounded-xl bg-white border" style="border-color:#E1DED5">
+            <p class="text-xs" style="color:#6C7B8A">Caja chica</p>
+            <p class="text-2xl font-bold" style="color:${COLOR}">$${Number(cuenta.saldo_caja_chica).toFixed(2)}</p>
+          </div>
+          ${tieneAcreimex ? `
+          <div class="p-4 rounded-xl bg-white border" style="border-color:#E1DED5">
+            <p class="text-xs" style="color:#6C7B8A">Acreimex</p>
+            <p class="text-2xl font-bold" style="color:${COLOR}">$${Number(cuenta.saldo_acreimex).toFixed(2)}</p>
+          </div>` : ""}
+        </div>
+
+        <div class="flex gap-2 mb-4">
+          <button id="btnNuevaEntrada" class="flex-1 py-2 rounded-lg text-sm font-bold text-white" style="background:#3F7A5E">+ Entrada</button>
+          <button id="btnNuevaSalida" class="flex-1 py-2 rounded-lg text-sm font-bold text-white" style="background:#B5453A">− Salida</button>
+        </div>
+
+        <div id="formMovWrap"></div>
+
+        <p class="text-sm font-semibold mb-2" style="color:${COLOR}">Movimientos recientes</p>
+        <div class="space-y-2">
+          ${movimientos.length === 0 ? `<p class="text-sm" style="color:#6C7B8A">Aún no hay movimientos.</p>` : movimientos.map((m, i) => `
+            <div class="p-3 rounded-xl bg-white border" style="border-color:#E1DED5">
+              <div class="flex items-center justify-between">
+                <p class="text-sm font-semibold" style="color:${m.tipo === "Entrada" ? "#3F7A5E" : "#B5453A"}">${m.tipo === "Entrada" ? "+" : "−"} $${Number(m.monto).toFixed(2)} <span class="text-xs font-normal" style="color:#6C7B8A">(${m.cuenta})</span></p>
+                <p class="text-xs" style="color:#6C7B8A">${new Date(m.creado_en).toLocaleDateString("es-MX")}</p>
+              </div>
+              <p class="text-xs" style="color:#1C2B3A">${m.concepto}</p>
+              ${m.comentarios ? `<p class="text-xs" style="color:#6C7B8A">${m.comentarios}</p>` : ""}
+              ${m.comprobante_path ? `<button class="verComprobanteBtn text-xs underline mt-1" data-idx="${i}" style="color:${COLOR}">Ver comprobante</button>` : ""}
+            </div>`).join("")}
+        </div>
+      </div>`;
+
+    document.getElementById("btnNuevaEntrada").addEventListener("click", () => mostrarFormMovimiento("Entrada"));
+    document.getElementById("btnNuevaSalida").addEventListener("click", () => mostrarFormMovimiento("Salida"));
+
+    main.querySelectorAll(".verComprobanteBtn").forEach(b => b.addEventListener("click", async () => {
+      const m = movimientos[Number(b.dataset.idx)];
+      const { data, error } = await sb.storage.from("comprobantes").createSignedUrl(m.comprobante_path, 300);
+      if (error) { alert(error.message); return; }
+      window.open(data.signedUrl, "_blank");
+    }));
+  }
+
+  function mostrarFormMovimiento(tipo) {
+    const wrap = document.getElementById("formMovWrap");
+    const esSalida = tipo === "Salida";
+    wrap.innerHTML = `
+      <div class="p-4 rounded-xl bg-white border mb-4" style="border-color:#E1DED5">
+        <p class="text-sm font-semibold mb-2" style="color:${esSalida ? "#B5453A" : "#3F7A5E"}">Nueva ${tipo.toLowerCase()}</p>
+        ${tieneAcreimex ? `
+        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Cuenta</label>
+        <select id="movCuenta" class="w-full px-3 py-2 rounded-lg text-sm mb-2 outline-none border" style="border-color:#E1DED5">
+          <option value="Caja chica">Caja chica</option>
+          <option value="Acreimex">Acreimex</option>
+        </select>` : ""}
+        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Monto</label>
+        <input id="movMonto" type="number" step="0.01" min="0.01" class="w-full px-3 py-2 rounded-lg text-sm mb-2 outline-none border" style="border-color:#E1DED5" />
+        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Concepto</label>
+        <input id="movConcepto" class="w-full px-3 py-2 rounded-lg text-sm mb-2 outline-none border" style="border-color:#E1DED5" />
+        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Comentarios (opcional)</label>
+        <textarea id="movComentarios" rows="2" class="w-full px-3 py-2 rounded-lg text-sm mb-2 outline-none border" style="border-color:#E1DED5"></textarea>
+        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Comprobante (foto)${esSalida ? " — obligatorio" : " — opcional"}</label>
+        <input id="movComprobante" type="file" accept="image/*" capture="environment" class="w-full text-sm mb-2" />
+        <div id="movMsg"></div>
+        <div class="flex gap-2">
+          <button id="movCancelar" class="flex-1 py-2 rounded-lg text-sm font-semibold" style="background:#F4F1EB; color:${COLOR}">Cancelar</button>
+          <button id="movGuardar" class="flex-1 py-2 rounded-lg text-sm font-bold text-white" style="background:${esSalida ? "#B5453A" : "#3F7A5E"}">Guardar</button>
+        </div>
+      </div>`;
+
+    document.getElementById("movCancelar").addEventListener("click", () => { wrap.innerHTML = ""; });
+
+    document.getElementById("movGuardar").addEventListener("click", async () => {
+      const msg = document.getElementById("movMsg");
+      msg.innerHTML = "";
+      const monto = Number(document.getElementById("movMonto").value);
+      const concepto = document.getElementById("movConcepto").value.trim();
+      const comentarios = document.getElementById("movComentarios").value.trim();
+      const archivo = document.getElementById("movComprobante").files[0];
+      const cuentaSel = tieneAcreimex ? document.getElementById("movCuenta").value : "Caja chica";
+
+      if (!monto || monto <= 0) { msg.innerHTML = errBox("Escribe un monto válido."); return; }
+      if (!concepto) { msg.innerHTML = errBox("Escribe el concepto."); return; }
+      if (esSalida && !archivo) { msg.innerHTML = errBox("Las salidas requieren subir un comprobante."); return; }
+
+      let comprobantePath = null;
+      if (archivo) {
+        msg.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Subiendo comprobante…</p>`;
+        const ext = archivo.name.split(".").pop();
+        const ruta = `${state.usuario.id}/${crypto.randomUUID()}.${ext}`;
+        const { error: errSubida } = await sb.storage.from("comprobantes").upload(ruta, archivo);
+        if (errSubida) { msg.innerHTML = errBox("No se pudo subir el comprobante: " + errSubida.message); return; }
+        comprobantePath = ruta;
+      }
+
+      const { error } = await sb.rpc("movimiento_registrar", {
+        p_usuario_id: state.usuario.id,
+        p_tipo: tipo,
+        p_cuenta: cuentaSel,
+        p_monto: monto,
+        p_concepto: concepto,
+        p_comentarios: comentarios || null,
+        p_comprobante_path: comprobantePath,
+      });
+      if (error) { msg.innerHTML = errBox(error.message); return; }
+
+      renderCaja(main);
+    });
+  }
+
+  pintar();
 }
 
 init();
