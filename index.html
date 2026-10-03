@@ -48,6 +48,44 @@ function filtrarNombreComite(valor) {
   const sinAcentos = valor.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   return sinAcentos.toUpperCase().replace(/[^A-Z ]/g, "");
 }
+// Comprime una foto antes de subirla (reduce hasta ~1600px de lado mayor,
+// calidad 70%) para que ocupe poco espacio sin perder legibilidad
+function comprimirImagen(file, maxLado = 1600, calidad = 0.7) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > height && width > maxLado) {
+        height = Math.round(height * (maxLado / width));
+        width = maxLado;
+      } else if (height >= width && height > maxLado) {
+        width = Math.round(width * (maxLado / height));
+        height = maxLado;
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+      canvas.toBlob((blob) => {
+        URL.revokeObjectURL(url);
+        if (blob) resolve(blob); else reject(new Error("No se pudo comprimir la imagen."));
+      }, "image/jpeg", calidad);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("No se pudo leer la imagen.")); };
+    img.src = url;
+  });
+}
+
+// Comprime y sube un comprobante al bucket "comprobantes"; regresa la ruta guardada
+async function subirComprobante(archivo) {
+  const comprimido = await comprimirImagen(archivo);
+  const ruta = `${state.usuario.id}/${crypto.randomUUID()}.jpg`;
+  const { error } = await sb.storage.from("comprobantes").upload(ruta, comprimido, { contentType: "image/jpeg" });
+  if (error) throw error;
+  return ruta;
+}
+
 function aplicarFiltroEnVivo(elId, filtro) {
   const el = document.getElementById(elId);
   if (!el) return;
@@ -690,6 +728,7 @@ async function renderCaja(main) {
   const tieneAcreimex = cuenta.saldo_acreimex !== null;
 
   function pintar() {
+    const puedeSalida = Number(cuenta.saldo_caja_chica) > 0 || (tieneAcreimex && Number(cuenta.saldo_acreimex) > 0);
     main.innerHTML = `
       <h2 class="text-lg font-bold mb-4" style="color:${COLOR}">Mi caja</h2>
       <div class="max-w-2xl">
@@ -705,10 +744,12 @@ async function renderCaja(main) {
           </div>` : ""}
         </div>
 
-        <div class="flex gap-2 mb-4">
+        <div class="flex gap-2 mb-2">
           <button id="btnNuevaEntrada" class="flex-1 py-2 rounded-lg text-sm font-bold text-white" style="background:#3F7A5E">+ Entrada</button>
-          <button id="btnNuevaSalida" class="flex-1 py-2 rounded-lg text-sm font-bold text-white" style="background:#B5453A">− Salida</button>
+          <button id="btnNuevaSalida" ${puedeSalida ? "" : "disabled"} class="flex-1 py-2 rounded-lg text-sm font-bold text-white" style="background:${puedeSalida ? "#B5453A" : "#B9C3CC"}; ${puedeSalida ? "" : "cursor:not-allowed"}">− Salida${puedeSalida ? "" : " (sin saldo)"}</button>
+          <button id="btnNuevaTransferencia" class="flex-1 py-2 rounded-lg text-sm font-bold text-white" style="background:${COLOR}">🔁 Transferir</button>
         </div>
+        ${tieneAcreimex ? `<button id="btnAutoTransferencia" class="text-xs underline mb-4" style="color:${COLOR}">Transferir entre mis 2 cuentas (Caja chica ↔ Acreimex)</button>` : ""}
 
         <div id="formMovWrap"></div>
 
@@ -722,19 +763,29 @@ async function renderCaja(main) {
               </div>
               <p class="text-xs" style="color:#1C2B3A">${m.concepto}</p>
               ${m.comentarios ? `<p class="text-xs" style="color:#6C7B8A">${m.comentarios}</p>` : ""}
-              ${m.comprobante_path ? `<button class="verComprobanteBtn text-xs underline mt-1" data-idx="${i}" style="color:${COLOR}">Ver comprobante</button>` : ""}
+              <div class="flex items-center gap-3 mt-1">
+                ${m.comprobante_path ? `<button class="verComprobanteBtn text-xs underline" data-idx="${i}" style="color:${COLOR}">Ver comprobante</button>` : ""}
+                <button class="eliminarMovBtn text-xs underline" data-idx="${i}" style="color:#B5453A">Eliminar</button>
+              </div>
             </div>`).join("")}
         </div>
       </div>`;
 
     document.getElementById("btnNuevaEntrada").addEventListener("click", () => mostrarFormMovimiento("Entrada"));
-    document.getElementById("btnNuevaSalida").addEventListener("click", () => mostrarFormMovimiento("Salida"));
+    document.getElementById("btnNuevaSalida").addEventListener("click", () => { if (puedeSalida) mostrarFormMovimiento("Salida"); });
+    document.getElementById("btnNuevaTransferencia").addEventListener("click", () => mostrarFormTransferencia());
+    const btnAuto = document.getElementById("btnAutoTransferencia");
+    if (btnAuto) btnAuto.addEventListener("click", () => mostrarFormAutoTransferencia());
 
     main.querySelectorAll(".verComprobanteBtn").forEach(b => b.addEventListener("click", async () => {
       const m = movimientos[Number(b.dataset.idx)];
       const { data, error } = await sb.storage.from("comprobantes").createSignedUrl(m.comprobante_path, 300);
       if (error) { alert(error.message); return; }
       window.open(data.signedUrl, "_blank");
+    }));
+
+    main.querySelectorAll(".eliminarMovBtn").forEach(b => b.addEventListener("click", () => {
+      mostrarFormEliminarMovimiento(movimientos[Number(b.dataset.idx)]);
     }));
   }
 
@@ -782,12 +833,13 @@ async function renderCaja(main) {
 
       let comprobantePath = null;
       if (archivo) {
-        msg.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Subiendo comprobante…</p>`;
-        const ext = archivo.name.split(".").pop();
-        const ruta = `${state.usuario.id}/${crypto.randomUUID()}.${ext}`;
-        const { error: errSubida } = await sb.storage.from("comprobantes").upload(ruta, archivo);
-        if (errSubida) { msg.innerHTML = errBox("No se pudo subir el comprobante: " + errSubida.message); return; }
-        comprobantePath = ruta;
+        msg.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Comprimiendo y subiendo comprobante…</p>`;
+        try {
+          comprobantePath = await subirComprobante(archivo);
+        } catch (errSubida) {
+          msg.innerHTML = errBox("No se pudo subir el comprobante: " + errSubida.message);
+          return;
+        }
       }
 
       const { error } = await sb.rpc("movimiento_registrar", {
@@ -801,6 +853,180 @@ async function renderCaja(main) {
       });
       if (error) { msg.innerHTML = errBox(error.message); return; }
 
+      renderCaja(main);
+    });
+  }
+
+  // ---------- Eliminar movimiento (con autorización) ----------
+  function mostrarFormEliminarMovimiento(mov) {
+    const esTesorero = cuenta.rol === "Tesorero";
+    const rolContraparte = esTesorero ? "Presidente" : "Tesorero";
+    const modal = document.createElement("div");
+    modal.className = "fixed inset-0 z-50 flex items-center justify-center p-4";
+    modal.style.background = "rgba(28,43,58,0.6)";
+    modal.innerHTML = `
+      <div class="rounded-2xl p-5 bg-white w-full max-w-sm">
+        <p class="text-sm font-semibold mb-1" style="color:${COLOR}">Eliminar movimiento</p>
+        <p class="text-xs mb-3" style="color:#6C7B8A">${mov.tipo} de $${Number(mov.monto).toFixed(2)} — ${mov.concepto}</p>
+        <p class="text-xs mb-3" style="color:#6C7B8A">Requiere la autorización del ${rolContraparte} de tu comité y del Director.</p>
+        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Contraseña del ${rolContraparte} de tu comité</label>
+        <input id="elimContraparte" type="password" class="w-full px-3 py-2 rounded-lg text-sm mb-3 outline-none border" style="border-color:#E1DED5" />
+        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Contraseña del Director</label>
+        <input id="elimDirector" type="password" class="w-full px-3 py-2 rounded-lg text-sm mb-3 outline-none border" style="border-color:#E1DED5" />
+        <div id="elimMsg"></div>
+        <div class="flex gap-2">
+          <button id="elimCancelar" class="flex-1 py-2 rounded-lg text-sm font-semibold" style="background:#F4F1EB; color:${COLOR}">Cancelar</button>
+          <button id="elimConfirmar" class="flex-1 py-2 rounded-lg text-sm font-bold text-white" style="background:#B5453A">Eliminar</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+
+    document.getElementById("elimCancelar").addEventListener("click", () => modal.remove());
+    document.getElementById("elimConfirmar").addEventListener("click", async () => {
+      const msg = document.getElementById("elimMsg");
+      msg.innerHTML = "";
+      const { error } = await sb.rpc("movimiento_eliminar", {
+        p_solicitante_id: state.usuario.id,
+        p_movimiento_id: mov.id,
+        p_password_contraparte: document.getElementById("elimContraparte").value,
+        p_password_director: document.getElementById("elimDirector").value,
+      });
+      if (error) { msg.innerHTML = errBox(error.message); return; }
+      modal.remove();
+      renderCaja(main);
+    });
+  }
+
+  // ---------- Transferencia a otra persona ----------
+  async function mostrarFormTransferencia() {
+    const wrap = document.getElementById("formMovWrap");
+    wrap.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Cargando destinatarios…</p>`;
+
+    const { data: destinatarios, error: errDest } = await sb.rpc("usuarios_transferibles_listar");
+    if (errDest) { wrap.innerHTML = errBox(errDest.message); return; }
+    const lista = (destinatarios || []).filter(d => d.id !== state.usuario.id);
+
+    wrap.innerHTML = `
+      <div class="p-4 rounded-xl bg-white border mb-4" style="border-color:#E1DED5">
+        <p class="text-sm font-semibold mb-2" style="color:${COLOR}">Nueva transferencia</p>
+        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">¿A quién le envías?</label>
+        <select id="trDestino" class="w-full px-3 py-2 rounded-lg text-sm mb-2 outline-none border" style="border-color:#E1DED5">
+          <option value="">Selecciona…</option>
+          ${lista.map(d => `<option value="${d.id}" data-rol="${d.rol}" data-comite="${d.comite_id || ""}">${d.nombre_completo} — ${d.rol}${d.comite_nombre ? " de " + d.comite_nombre : ""}</option>`).join("")}
+        </select>
+        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Monto</label>
+        <input id="trMonto" type="number" step="0.01" min="0.01" class="w-full px-3 py-2 rounded-lg text-sm mb-2 outline-none border" style="border-color:#E1DED5" />
+        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Concepto (opcional)</label>
+        <input id="trConcepto" class="w-full px-3 py-2 rounded-lg text-sm mb-2 outline-none border" style="border-color:#E1DED5" />
+        <div id="trAutorizacionesWrap"></div>
+        <div id="trMsg"></div>
+        <div class="flex gap-2 mt-2">
+          <button id="trCancelar" class="flex-1 py-2 rounded-lg text-sm font-semibold" style="background:#F4F1EB; color:${COLOR}">Cancelar</button>
+          <button id="trGuardar" class="flex-1 py-2 rounded-lg text-sm font-bold text-white" style="background:${COLOR}">Transferir</button>
+        </div>
+      </div>`;
+
+    document.getElementById("trCancelar").addEventListener("click", () => { wrap.innerHTML = ""; });
+
+    function pintarAutorizaciones() {
+      const sel = document.getElementById("trDestino");
+      const opt = sel.selectedOptions[0];
+      const wrapAut = document.getElementById("trAutorizacionesWrap");
+      if (!opt || !opt.value) { wrapAut.innerHTML = ""; return; }
+
+      const comiteDestino = opt.dataset.comite || null;
+      const mismoComite = comiteDestino === (cuenta.comite_id || "");
+      const rolContraparte = cuenta.rol === "Tesorero" ? "Presidente" : "Tesorero";
+
+      wrapAut.innerHTML = `
+        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Contraseña de quien recibe</label>
+        <input id="trPassReceptor" type="password" class="w-full px-3 py-2 rounded-lg text-sm mb-2 outline-none border" style="border-color:#E1DED5" />
+        ${!mismoComite ? `
+        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Contraseña del ${rolContraparte} de tu comité</label>
+        <input id="trPassContraparte" type="password" class="w-full px-3 py-2 rounded-lg text-sm mb-2 outline-none border" style="border-color:#E1DED5" />` : ""}
+        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Contraseña del Director</label>
+        <input id="trPassDirector" type="password" class="w-full px-3 py-2 rounded-lg text-sm mb-2 outline-none border" style="border-color:#E1DED5" />`;
+    }
+
+    document.getElementById("trDestino").addEventListener("change", pintarAutorizaciones);
+
+    document.getElementById("trGuardar").addEventListener("click", async () => {
+      const msg = document.getElementById("trMsg");
+      msg.innerHTML = "";
+      const destinoId = document.getElementById("trDestino").value;
+      const monto = Number(document.getElementById("trMonto").value);
+      if (!destinoId) { msg.innerHTML = errBox("Selecciona a quién le envías."); return; }
+      if (!monto || monto <= 0) { msg.innerHTML = errBox("Escribe un monto válido."); return; }
+
+      const { error } = await sb.rpc("transferencia_registrar", {
+        p_usuario_origen_id: state.usuario.id,
+        p_usuario_destino_id: destinoId,
+        p_monto: monto,
+        p_concepto: document.getElementById("trConcepto").value.trim() || null,
+        p_password_receptor: document.getElementById("trPassReceptor")?.value || null,
+        p_password_contraparte_origen: document.getElementById("trPassContraparte")?.value || null,
+        p_password_director: document.getElementById("trPassDirector")?.value || null,
+      });
+      if (error) { msg.innerHTML = errBox(error.message); return; }
+      renderCaja(main);
+    });
+  }
+
+  // ---------- Transferencia entre mis propias 2 cuentas (solo Tesorero PdF) ----------
+  function mostrarFormAutoTransferencia() {
+    const wrap = document.getElementById("formMovWrap");
+    wrap.innerHTML = `
+      <div class="p-4 rounded-xl bg-white border mb-4" style="border-color:#E1DED5">
+        <p class="text-sm font-semibold mb-2" style="color:${COLOR}">Transferir entre mis cuentas</p>
+        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">De</label>
+        <select id="atOrigen" class="w-full px-3 py-2 rounded-lg text-sm mb-2 outline-none border" style="border-color:#E1DED5">
+          <option value="Caja chica">Caja chica</option>
+          <option value="Acreimex">Acreimex</option>
+        </select>
+        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Monto</label>
+        <input id="atMonto" type="number" step="0.01" min="0.01" class="w-full px-3 py-2 rounded-lg text-sm mb-2 outline-none border" style="border-color:#E1DED5" />
+        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Concepto (opcional)</label>
+        <input id="atConcepto" class="w-full px-3 py-2 rounded-lg text-sm mb-2 outline-none border" style="border-color:#E1DED5" />
+        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Comprobante (ficha de depósito o retiro) — obligatorio</label>
+        <input id="atComprobante" type="file" accept="image/*" capture="environment" class="w-full text-sm mb-2" />
+        <div id="atMsg"></div>
+        <div class="flex gap-2">
+          <button id="atCancelar" class="flex-1 py-2 rounded-lg text-sm font-semibold" style="background:#F4F1EB; color:${COLOR}">Cancelar</button>
+          <button id="atGuardar" class="flex-1 py-2 rounded-lg text-sm font-bold text-white" style="background:${COLOR}">Transferir</button>
+        </div>
+      </div>`;
+
+    document.getElementById("atCancelar").addEventListener("click", () => { wrap.innerHTML = ""; });
+
+    document.getElementById("atGuardar").addEventListener("click", async () => {
+      const msg = document.getElementById("atMsg");
+      msg.innerHTML = "";
+      const origen = document.getElementById("atOrigen").value;
+      const destino = origen === "Caja chica" ? "Acreimex" : "Caja chica";
+      const monto = Number(document.getElementById("atMonto").value);
+      const archivo = document.getElementById("atComprobante").files[0];
+      if (!monto || monto <= 0) { msg.innerHTML = errBox("Escribe un monto válido."); return; }
+      if (!archivo) { msg.innerHTML = errBox("Sube el comprobante del depósito/retiro."); return; }
+
+      let comprobantePath;
+      try {
+        msg.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Comprimiendo y subiendo comprobante…</p>`;
+        comprobantePath = await subirComprobante(archivo);
+      } catch (errSubida) {
+        msg.innerHTML = errBox("No se pudo subir el comprobante: " + errSubida.message);
+        return;
+      }
+
+      const { error } = await sb.rpc("transferencia_registrar", {
+        p_usuario_origen_id: state.usuario.id,
+        p_usuario_destino_id: state.usuario.id,
+        p_monto: monto,
+        p_concepto: document.getElementById("atConcepto").value.trim() || null,
+        p_comprobante_path: comprobantePath,
+        p_cuenta_origen: origen,
+        p_cuenta_destino: destino,
+      });
+      if (error) { msg.innerHTML = errBox(error.message); return; }
       renderCaja(main);
     });
   }
