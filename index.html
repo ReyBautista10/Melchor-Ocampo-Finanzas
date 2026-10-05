@@ -598,7 +598,8 @@ async function renderLogs(main) {
             <p class="text-xs mt-1" style="color:#6C7B8A">
               Por: ${l.realizado_por_nombre || "—"}
               ${l.autorizado_por_1_nombre ? " · Autorizó: " + l.autorizado_por_1_nombre : ""}
-              ${l.autorizado_por_2_nombre ? " y " + l.autorizado_por_2_nombre : ""}
+              ${l.autorizado_por_2_nombre ? ", " + l.autorizado_por_2_nombre : ""}
+              ${l.autorizado_por_3_nombre ? " y " + l.autorizado_por_3_nombre : ""}
               · ${new Date(l.fecha_hora).toLocaleString("es-MX")}
             </p>
           </div>`).join("")}
@@ -634,7 +635,7 @@ function exportarBitacoraPDF(registros) {
     y += detalle.length * 4.5;
 
     doc.setFontSize(8);
-    const autorizacion = `Por: ${r.realizado_por_nombre || "—"}${r.autorizado_por_1_nombre ? " · Autorizó: " + r.autorizado_por_1_nombre : ""}${r.autorizado_por_2_nombre ? " y " + r.autorizado_por_2_nombre : ""}`;
+    const autorizacion = `Por: ${r.realizado_por_nombre || "—"}${r.autorizado_por_1_nombre ? " · Autorizó: " + r.autorizado_por_1_nombre : ""}${r.autorizado_por_2_nombre ? ", " + r.autorizado_por_2_nombre : ""}${r.autorizado_por_3_nombre ? " y " + r.autorizado_por_3_nombre : ""}`;
     doc.text(autorizacion, 20, y);
     doc.setFontSize(9);
     y += 7;
@@ -729,6 +730,7 @@ async function renderCaja(main) {
 
   function pintar() {
     const puedeSalida = Number(cuenta.saldo_caja_chica) > 0 || (tieneAcreimex && Number(cuenta.saldo_acreimex) > 0);
+    const puedeTransferir = Number(cuenta.saldo_caja_chica) > 0;
     main.innerHTML = `
       <h2 class="text-lg font-bold mb-4" style="color:${COLOR}">Mi caja</h2>
       <div class="max-w-2xl">
@@ -747,9 +749,9 @@ async function renderCaja(main) {
         <div class="flex gap-2 mb-2">
           <button id="btnNuevaEntrada" class="flex-1 py-2 rounded-lg text-sm font-bold text-white" style="background:#3F7A5E">+ Entrada</button>
           <button id="btnNuevaSalida" ${puedeSalida ? "" : "disabled"} class="flex-1 py-2 rounded-lg text-sm font-bold text-white" style="background:${puedeSalida ? "#B5453A" : "#B9C3CC"}; ${puedeSalida ? "" : "cursor:not-allowed"}">− Salida${puedeSalida ? "" : " (sin saldo)"}</button>
-          <button id="btnNuevaTransferencia" class="flex-1 py-2 rounded-lg text-sm font-bold text-white" style="background:${COLOR}">🔁 Transferir</button>
+          <button id="btnNuevaTransferencia" ${puedeTransferir ? "" : "disabled"} class="flex-1 py-2 rounded-lg text-sm font-bold text-white" style="background:${puedeTransferir ? COLOR : "#B9C3CC"}; ${puedeTransferir ? "" : "cursor:not-allowed"}">🔁 Transferir${puedeTransferir ? "" : " (sin saldo)"}</button>
         </div>
-        ${tieneAcreimex ? `<button id="btnAutoTransferencia" class="text-xs underline mb-4" style="color:${COLOR}">Transferir entre mis 2 cuentas (Caja chica ↔ Acreimex)</button>` : ""}
+        ${tieneAcreimex ? `<button id="btnAutoTransferencia" ${puedeSalida ? "" : "disabled"} class="text-xs underline mb-4" style="color:${puedeSalida ? COLOR : "#B9C3CC"}">Transferir entre mis 2 cuentas (Caja chica ↔ Acreimex)${puedeSalida ? "" : " (sin saldo)"}</button>` : ""}
 
         <div id="formMovWrap"></div>
 
@@ -758,14 +760,14 @@ async function renderCaja(main) {
           ${movimientos.length === 0 ? `<p class="text-sm" style="color:#6C7B8A">Aún no hay movimientos.</p>` : movimientos.map((m, i) => `
             <div class="p-3 rounded-xl bg-white border" style="border-color:#E1DED5">
               <div class="flex items-center justify-between">
-                <p class="text-sm font-semibold" style="color:${m.tipo === "Entrada" ? "#3F7A5E" : "#B5453A"}">${m.tipo === "Entrada" ? "+" : "−"} $${Number(m.monto).toFixed(2)} <span class="text-xs font-normal" style="color:#6C7B8A">(${m.cuenta})</span></p>
+                <p class="text-sm font-semibold" style="color:${m.es_entrada ? "#3F7A5E" : "#B5453A"}">${m.es_entrada ? "+" : "−"} $${Number(m.monto).toFixed(2)} <span class="text-xs font-normal" style="color:#6C7B8A">(${m.cuenta})</span></p>
                 <p class="text-xs" style="color:#6C7B8A">${new Date(m.creado_en).toLocaleDateString("es-MX")}</p>
               </div>
-              <p class="text-xs" style="color:#1C2B3A">${m.concepto}</p>
+              <p class="text-xs" style="color:#1C2B3A">${m.tipo} — ${m.concepto}</p>
               ${m.comentarios ? `<p class="text-xs" style="color:#6C7B8A">${m.comentarios}</p>` : ""}
               <div class="flex items-center gap-3 mt-1">
                 ${m.comprobante_path ? `<button class="verComprobanteBtn text-xs underline" data-idx="${i}" style="color:${COLOR}">Ver comprobante</button>` : ""}
-                <button class="eliminarMovBtn text-xs underline" data-idx="${i}" style="color:#B5453A">Eliminar</button>
+                ${(m.tipo === "Entrada" || m.tipo === "Salida") ? `<button class="eliminarMovBtn text-xs underline" data-idx="${i}" style="color:#B5453A">Eliminar</button>` : ""}
               </div>
             </div>`).join("")}
         </div>
@@ -773,9 +775,9 @@ async function renderCaja(main) {
 
     document.getElementById("btnNuevaEntrada").addEventListener("click", () => mostrarFormMovimiento("Entrada"));
     document.getElementById("btnNuevaSalida").addEventListener("click", () => { if (puedeSalida) mostrarFormMovimiento("Salida"); });
-    document.getElementById("btnNuevaTransferencia").addEventListener("click", () => mostrarFormTransferencia());
+    document.getElementById("btnNuevaTransferencia").addEventListener("click", () => { if (puedeTransferir) mostrarFormTransferencia(); });
     const btnAuto = document.getElementById("btnAutoTransferencia");
-    if (btnAuto) btnAuto.addEventListener("click", () => mostrarFormAutoTransferencia());
+    if (btnAuto) btnAuto.addEventListener("click", () => { if (puedeSalida) mostrarFormAutoTransferencia(); });
 
     main.querySelectorAll(".verComprobanteBtn").forEach(b => b.addEventListener("click", async () => {
       const m = movimientos[Number(b.dataset.idx)];
