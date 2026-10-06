@@ -727,10 +727,12 @@ async function renderCaja(main) {
   const cuenta = cuentaData[0];
   const movimientos = movsData || [];
   const tieneAcreimex = cuenta.saldo_acreimex !== null;
+  let filtroCuenta = "Todas";
 
   function pintar() {
     const puedeSalida = Number(cuenta.saldo_caja_chica) > 0 || (tieneAcreimex && Number(cuenta.saldo_acreimex) > 0);
     const puedeTransferir = Number(cuenta.saldo_caja_chica) > 0;
+    const listaMostrada = filtroCuenta === "Todas" ? movimientos : movimientos.filter(m => m.cuenta === filtroCuenta);
     main.innerHTML = `
       <h2 class="text-lg font-bold mb-4" style="color:${COLOR}">Mi caja</h2>
       <div class="max-w-2xl">
@@ -755,15 +757,23 @@ async function renderCaja(main) {
 
         <div id="formMovWrap"></div>
 
-        <p class="text-sm font-semibold mb-2" style="color:${COLOR}">Movimientos recientes</p>
+        <div class="flex items-center justify-between mb-2">
+          <p class="text-sm font-semibold" style="color:${COLOR}">Movimientos recientes</p>
+          ${tieneAcreimex ? `
+          <select id="filtroCuentaSel" class="px-2 py-1 rounded-lg text-xs outline-none border" style="border-color:#E1DED5">
+            <option value="Todas" ${filtroCuenta === "Todas" ? "selected" : ""}>Todas las cuentas</option>
+            <option value="Caja chica" ${filtroCuenta === "Caja chica" ? "selected" : ""}>Solo caja chica</option>
+            <option value="Acreimex" ${filtroCuenta === "Acreimex" ? "selected" : ""}>Solo Acreimex</option>
+          </select>` : ""}
+        </div>
         <div class="space-y-2">
-          ${movimientos.length === 0 ? `<p class="text-sm" style="color:#6C7B8A">Aún no hay movimientos.</p>` : movimientos.map((m, i) => `
+          ${listaMostrada.length === 0 ? `<p class="text-sm" style="color:#6C7B8A">Aún no hay movimientos.</p>` : listaMostrada.map((m, i) => `
             <div class="p-3 rounded-xl bg-white border" style="border-color:#E1DED5">
               <div class="flex items-center justify-between">
                 <p class="text-sm font-semibold" style="color:${m.es_entrada ? "#3F7A5E" : "#B5453A"}">${m.es_entrada ? "+" : "−"} $${Number(m.monto).toFixed(2)} <span class="text-xs font-normal" style="color:#6C7B8A">(${m.cuenta})</span></p>
                 <p class="text-xs" style="color:#6C7B8A">${new Date(m.creado_en).toLocaleDateString("es-MX")}</p>
               </div>
-              <p class="text-xs" style="color:#1C2B3A">${m.tipo} — ${m.concepto}</p>
+              <p class="text-xs" style="color:#1C2B3A">${m.tipo.startsWith("Transferencia") ? m.concepto : m.tipo + " — " + m.concepto}</p>
               ${m.comentarios ? `<p class="text-xs" style="color:#6C7B8A">${m.comentarios}</p>` : ""}
               <div class="flex items-center gap-3 mt-1">
                 ${m.comprobante_path ? `<button class="verComprobanteBtn text-xs underline" data-idx="${i}" style="color:${COLOR}">Ver comprobante</button>` : ""}
@@ -779,15 +789,18 @@ async function renderCaja(main) {
     const btnAuto = document.getElementById("btnAutoTransferencia");
     if (btnAuto) btnAuto.addEventListener("click", () => { if (puedeSalida) mostrarFormAutoTransferencia(); });
 
+    const selFiltro = document.getElementById("filtroCuentaSel");
+    if (selFiltro) selFiltro.addEventListener("change", (e) => { filtroCuenta = e.target.value; pintar(); });
+
     main.querySelectorAll(".verComprobanteBtn").forEach(b => b.addEventListener("click", async () => {
-      const m = movimientos[Number(b.dataset.idx)];
+      const m = listaMostrada[Number(b.dataset.idx)];
       const { data, error } = await sb.storage.from("comprobantes").createSignedUrl(m.comprobante_path, 300);
       if (error) { alert(error.message); return; }
       window.open(data.signedUrl, "_blank");
     }));
 
     main.querySelectorAll(".eliminarMovBtn").forEach(b => b.addEventListener("click", () => {
-      mostrarFormEliminarMovimiento(movimientos[Number(b.dataset.idx)]);
+      mostrarFormEliminarMovimiento(listaMostrada[Number(b.dataset.idx)]);
     }));
   }
 
