@@ -6,6 +6,7 @@
 <title>Sistema de Comités Escolares</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -748,6 +749,7 @@ async function renderCaja(main) {
           </div>` : ""}
         </div>
 
+        <button id="btnGenerarReporte" class="mb-3 px-3 py-1.5 rounded-lg text-xs font-semibold" style="background:#F4F1EB; color:${COLOR}">📄 Generar reporte (estado de cuenta)</button>
         <div class="flex gap-2 mb-2">
           <button id="btnNuevaEntrada" class="flex-1 py-2 rounded-lg text-sm font-bold text-white" style="background:#3F7A5E">+ Entrada</button>
           <button id="btnNuevaSalida" ${puedeSalida ? "" : "disabled"} class="flex-1 py-2 rounded-lg text-sm font-bold text-white" style="background:${puedeSalida ? "#B5453A" : "#B9C3CC"}; ${puedeSalida ? "" : "cursor:not-allowed"}">− Salida${puedeSalida ? "" : " (sin saldo)"}</button>
@@ -783,6 +785,7 @@ async function renderCaja(main) {
         </div>
       </div>`;
 
+    document.getElementById("btnGenerarReporte").addEventListener("click", () => mostrarFormReporte());
     document.getElementById("btnNuevaEntrada").addEventListener("click", () => mostrarFormMovimiento("Entrada"));
     document.getElementById("btnNuevaSalida").addEventListener("click", () => { if (puedeSalida) mostrarFormMovimiento("Salida"); });
     document.getElementById("btnNuevaTransferencia").addEventListener("click", () => { if (puedeTransferir) mostrarFormTransferencia(); });
@@ -1046,7 +1049,219 @@ async function renderCaja(main) {
     });
   }
 
+  // ---------- Generar reporte (estado de cuenta) ----------
+  function mostrarFormReporte() {
+    const modal = document.createElement("div");
+    modal.className = "fixed inset-0 z-50 flex items-center justify-center p-4";
+    modal.style.background = "rgba(28,43,58,0.6)";
+    modal.innerHTML = `
+      <div class="rounded-2xl p-5 bg-white w-full max-w-sm max-h-[85vh] overflow-y-auto">
+        <p class="text-sm font-semibold mb-3" style="color:${COLOR}">Generar reporte</p>
+        ${tieneAcreimex ? `
+        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Cuenta</label>
+        <select id="repCuenta" class="w-full px-3 py-2 rounded-lg text-sm mb-3 outline-none border" style="border-color:#E1DED5">
+          <option value="Caja chica">Caja chica</option>
+          <option value="Acreimex">Acreimex</option>
+        </select>` : ""}
+        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Periodo</label>
+        <select id="repPeriodo" class="w-full px-3 py-2 rounded-lg text-sm mb-2 outline-none border" style="border-color:#E1DED5">
+          <option value="dia">Hoy</option>
+          <option value="semana">Esta semana</option>
+          <option value="mes" selected>Este mes</option>
+          <option value="personalizado">Rango personalizado</option>
+        </select>
+        <div id="repRangoWrap" style="display:none" class="grid grid-cols-2 gap-2 mb-2">
+          <div>
+            <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Desde</label>
+            <input id="repDesde" type="date" class="w-full px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
+          </div>
+          <div>
+            <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Hasta</label>
+            <input id="repHasta" type="date" class="w-full px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
+          </div>
+        </div>
+        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Tipos a incluir</label>
+        <div class="mb-3 space-y-1">
+          <label class="flex items-center gap-2 text-sm" style="color:#1C2B3A"><input type="checkbox" id="repEntradas" checked /> Entradas</label>
+          <label class="flex items-center gap-2 text-sm" style="color:#1C2B3A"><input type="checkbox" id="repSalidas" checked /> Salidas</label>
+          <label class="flex items-center gap-2 text-sm" style="color:#1C2B3A"><input type="checkbox" id="repTransferencias" checked /> Transferencias</label>
+        </div>
+        <div id="repMsg"></div>
+        <div class="flex gap-2">
+          <button id="repCancelar" class="flex-1 py-2 rounded-lg text-sm font-semibold" style="background:#F4F1EB; color:${COLOR}">Cancelar</button>
+          <button id="repGenerar" class="flex-1 py-2 rounded-lg text-sm font-bold text-white" style="background:${COLOR}">Generar PDF</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+
+    document.getElementById("repPeriodo").addEventListener("change", (e) => {
+      document.getElementById("repRangoWrap").style.display = e.target.value === "personalizado" ? "grid" : "none";
+    });
+
+    document.getElementById("repCancelar").addEventListener("click", () => modal.remove());
+
+    document.getElementById("repGenerar").addEventListener("click", async () => {
+      const msg = document.getElementById("repMsg");
+      msg.innerHTML = "";
+
+      const cuentaRep = tieneAcreimex ? document.getElementById("repCuenta").value : "Caja chica";
+      const periodo = document.getElementById("repPeriodo").value;
+
+      let fechaInicio, fechaFin;
+      const hoy = new Date();
+      if (periodo === "dia") {
+        fechaInicio = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate(), 0, 0, 0);
+        fechaFin = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate(), 23, 59, 59);
+      } else if (periodo === "semana") {
+        const diaSemana = hoy.getDay() === 0 ? 7 : hoy.getDay();
+        fechaInicio = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate() - diaSemana + 1, 0, 0, 0);
+        fechaFin = new Date(fechaInicio); fechaFin.setDate(fechaInicio.getDate() + 6); fechaFin.setHours(23, 59, 59);
+      } else if (periodo === "mes") {
+        fechaInicio = new Date(hoy.getFullYear(), hoy.getMonth(), 1, 0, 0, 0);
+        fechaFin = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0, 23, 59, 59);
+      } else {
+        const desde = document.getElementById("repDesde").value;
+        const hasta = document.getElementById("repHasta").value;
+        if (!desde || !hasta) { msg.innerHTML = errBox("Selecciona las dos fechas del rango."); return; }
+        fechaInicio = new Date(desde + "T00:00:00");
+        fechaFin = new Date(hasta + "T23:59:59");
+      }
+
+      const tiposIncluidos = [];
+      if (document.getElementById("repEntradas").checked) tiposIncluidos.push("Entrada");
+      if (document.getElementById("repSalidas").checked) tiposIncluidos.push("Salida");
+      if (document.getElementById("repTransferencias").checked) tiposIncluidos.push("Transferencia");
+      if (tiposIncluidos.length === 0) { msg.innerHTML = errBox("Selecciona al menos un tipo de movimiento."); return; }
+
+      msg.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Generando…</p>`;
+
+      const { data: historial, error: errHist } = await sb.rpc("cuenta_historial_completo", {
+        p_usuario_id: state.usuario.id, p_cuenta: cuentaRep,
+      });
+      if (errHist) { msg.innerHTML = errBox(errHist.message); return; }
+
+      const { data: directorData } = await sb.rpc("director_actual_obtener");
+      const nombreDirector = (directorData && directorData[0] && directorData[0].nombre_completo) || "—";
+
+      const categoriaDe = (tipo) => tipo === "Entrada" ? "Entrada" : tipo === "Salida" ? "Salida" : "Transferencia";
+
+      const saldoActual = cuentaRep === "Acreimex" ? Number(cuenta.saldo_acreimex) : Number(cuenta.saldo_caja_chica);
+
+      const desdeInicioHastaHoy = (historial || []).filter(h => new Date(h.creado_en) >= fechaInicio);
+      const netoDesdeInicio = desdeInicioHastaHoy.reduce((s, h) => s + (h.es_entrada ? Number(h.monto) : -Number(h.monto)), 0);
+      const balanceInicial = saldoActual - netoDesdeInicio;
+
+      const filasRango = (historial || []).filter(h => {
+        const f = new Date(h.creado_en);
+        return f >= fechaInicio && f <= fechaFin && tiposIncluidos.includes(categoriaDe(h.tipo));
+      });
+
+      let balanceCorrido = balanceInicial;
+      const filasConBalance = filasRango.map(f => {
+        balanceCorrido += f.es_entrada ? Number(f.monto) : -Number(f.monto);
+        return { ...f, balance: balanceCorrido };
+      });
+
+      generarReporteEstadoCuentaPDF({
+        titular: state.usuario.nombre_completo,
+        cargo: `${cuenta.rol} de ${cuenta.comite_nombre || "—"}`,
+        cuenta: cuentaRep,
+        fechaInicioTexto: fechaInicio.toLocaleDateString("es-MX"),
+        fechaFinTexto: fechaFin.toLocaleDateString("es-MX"),
+        balanceInicial,
+        filas: filasConBalance,
+        directorNombre: nombreDirector,
+      });
+
+      modal.remove();
+    });
+  }
+
   pintar();
+}
+
+// ============================================================
+// Genera el PDF del reporte (estado de cuenta) con autoTable
+// ============================================================
+function generarReporteEstadoCuentaPDF({ titular, cargo, cuenta, fechaInicioTexto, fechaFinTexto, balanceInicial, filas, directorNombre }) {
+  const doc = new window.jspdf.jsPDF({ unit: "mm", format: "letter", orientation: "portrait" });
+
+  const body = filas.map((f, i) => [
+    String(i + 1),
+    new Date(f.creado_en).toLocaleString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }),
+    f.concepto || "",
+    f.tipo,
+    f.es_entrada ? `$${Number(f.monto).toFixed(2)}` : "",
+    !f.es_entrada ? `$${Number(f.monto).toFixed(2)}` : "",
+    `$${Number(f.balance).toFixed(2)}`,
+  ]);
+
+  doc.autoTable({
+    startY: 45,
+    head: [["No.", "Fecha y hora", "Concepto", "Tipo", "Entradas", "Salidas", "Balance"]],
+    body,
+    styles: { fontSize: 7, cellPadding: 1.5, valign: "middle" },
+    headStyles: { fillColor: [28, 61, 90] },
+    columnStyles: {
+      0: { cellWidth: 8 },
+      1: { cellWidth: 26 },
+      2: { cellWidth: 56 },
+      3: { cellWidth: 24 },
+      4: { cellWidth: 22, halign: "right" },
+      5: { cellWidth: 22, halign: "right" },
+      6: { cellWidth: 24, halign: "right" },
+    },
+    margin: { top: 45, bottom: 25, left: 12, right: 12 },
+    didDrawPage: (data) => {
+      if (data.pageNumber === 1) {
+        doc.setFontSize(13);
+        doc.setFont(undefined, "bold");
+        doc.text("Estado de Cuenta — Sistema de Comités Escolares", 12, 15);
+        doc.setFont(undefined, "normal");
+        doc.setFontSize(9);
+        doc.text(`Titular: ${titular}`, 12, 21);
+        doc.text(`Cargo: ${cargo}`, 12, 26);
+        doc.text(`Cuenta: ${cuenta}`, 12, 31);
+        doc.text(`Periodo: ${fechaInicioTexto} a ${fechaFinTexto}`, 12, 36);
+        doc.text(`Balance inicial: $${Number(balanceInicial).toFixed(2)}`, 12, 41);
+      }
+    },
+  });
+
+  // Decide en qué página van las firmas (si no cabe, se agrega una hoja nueva)
+  let paginaFirmas = doc.internal.getNumberOfPages();
+  doc.setPage(paginaFirmas);
+  let yFirma = (doc.lastAutoTable ? doc.lastAutoTable.finalY : 50) + 25;
+  const alturaUtil = doc.internal.pageSize.getHeight() - 25;
+  if (yFirma + 15 > alturaUtil) {
+    doc.addPage();
+    paginaFirmas = doc.internal.getNumberOfPages();
+    yFirma = 35;
+  }
+
+  // Firmas (solo en la página final)
+  doc.setPage(paginaFirmas);
+  doc.setFontSize(9);
+  doc.setFont(undefined, "normal");
+  doc.text("Elaboró:", 12, yFirma - 10);
+  doc.line(12, yFirma, 90, yFirma);
+  doc.text(titular, 12, yFirma + 5);
+  doc.text(cargo, 12, yFirma + 10);
+
+  doc.text("Autorizó:", 125, yFirma - 10);
+  doc.line(125, yFirma, 198, yFirma);
+  doc.text(directorNombre || "—", 125, yFirma + 5);
+  doc.text('Director de la Escuela Primaria "Melchor Ocampo"', 125, yFirma + 10);
+
+  // Numeración X/Y en todas las páginas (se hace al final, ya con el total correcto)
+  const totalPaginas = doc.internal.getNumberOfPages();
+  for (let p = 1; p <= totalPaginas; p++) {
+    doc.setPage(p);
+    doc.setFontSize(8);
+    doc.text(`${p}/${totalPaginas}`, doc.internal.pageSize.getWidth() - 20, doc.internal.pageSize.getHeight() - 10);
+  }
+
+  doc.save(`estado_cuenta_${cuenta.toLowerCase().replace(" ", "_")}_${new Date().toISOString().slice(0, 10)}.pdf`);
 }
 
 init();
