@@ -297,6 +297,7 @@ const MENU = [
   { id: "comites", label: "Comités", roles: ["Super Administrador", "Director"] },
   { id: "solicitudes", label: "Solicitudes de recuperación", roles: ["Super Administrador", "Director"] },
   { id: "caja", label: "Mi caja", roles: ["Presidente", "Tesorero"] },
+  { id: "reportes", label: "Reportes", roles: ["Presidente", "Tesorero"] },
   { id: "logs", label: "Bitácora", roles: ["Super Administrador", "Director"] },
 ];
 
@@ -332,6 +333,7 @@ function renderApp(seccion) {
   if (activa === "comites") return renderComites(main);
   if (activa === "solicitudes") return renderSolicitudes(main);
   if (activa === "caja") return renderCaja(main);
+  if (activa === "reportes") return renderReportes(main);
   if (activa === "logs") return renderLogs(main);
 }
 
@@ -749,7 +751,6 @@ async function renderCaja(main) {
           </div>` : ""}
         </div>
 
-        <button id="btnGenerarReporte" class="mb-3 px-3 py-1.5 rounded-lg text-xs font-semibold" style="background:#F4F1EB; color:${COLOR}">📄 Generar reporte (estado de cuenta)</button>
         <div class="flex gap-2 mb-2">
           <button id="btnNuevaEntrada" class="flex-1 py-2 rounded-lg text-sm font-bold text-white" style="background:#3F7A5E">+ Entrada</button>
           <button id="btnNuevaSalida" ${puedeSalida ? "" : "disabled"} class="flex-1 py-2 rounded-lg text-sm font-bold text-white" style="background:${puedeSalida ? "#B5453A" : "#B9C3CC"}; ${puedeSalida ? "" : "cursor:not-allowed"}">− Salida${puedeSalida ? "" : " (sin saldo)"}</button>
@@ -785,7 +786,6 @@ async function renderCaja(main) {
         </div>
       </div>`;
 
-    document.getElementById("btnGenerarReporte").addEventListener("click", () => mostrarFormReporte());
     document.getElementById("btnNuevaEntrada").addEventListener("click", () => mostrarFormMovimiento("Entrada"));
     document.getElementById("btnNuevaSalida").addEventListener("click", () => { if (puedeSalida) mostrarFormMovimiento("Salida"); });
     document.getElementById("btnNuevaTransferencia").addEventListener("click", () => { if (puedeTransferir) mostrarFormTransferencia(); });
@@ -1049,131 +1049,195 @@ async function renderCaja(main) {
     });
   }
 
-  // ---------- Generar reporte (estado de cuenta) ----------
-  function mostrarFormReporte() {
-    const modal = document.createElement("div");
-    modal.className = "fixed inset-0 z-50 flex items-center justify-center p-4";
-    modal.style.background = "rgba(28,43,58,0.6)";
-    modal.innerHTML = `
-      <div class="rounded-2xl p-5 bg-white w-full max-w-sm max-h-[85vh] overflow-y-auto">
-        <p class="text-sm font-semibold mb-3" style="color:${COLOR}">Generar reporte</p>
-        ${tieneAcreimex ? `
-        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Cuenta</label>
-        <select id="repCuenta" class="w-full px-3 py-2 rounded-lg text-sm mb-3 outline-none border" style="border-color:#E1DED5">
-          <option value="Caja chica">Caja chica</option>
-          <option value="Acreimex">Acreimex</option>
-        </select>` : ""}
-        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Periodo</label>
-        <select id="repPeriodo" class="w-full px-3 py-2 rounded-lg text-sm mb-2 outline-none border" style="border-color:#E1DED5">
-          <option value="dia">Hoy</option>
-          <option value="semana">Esta semana</option>
-          <option value="mes" selected>Este mes</option>
-          <option value="personalizado">Rango personalizado</option>
-        </select>
-        <div id="repRangoWrap" style="display:none" class="grid grid-cols-2 gap-2 mb-2">
-          <div>
-            <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Desde</label>
-            <input id="repDesde" type="date" class="w-full px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
-          </div>
-          <div>
-            <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Hasta</label>
-            <input id="repHasta" type="date" class="w-full px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
-          </div>
-        </div>
-        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Tipos a incluir</label>
-        <div class="mb-3 space-y-1">
-          <label class="flex items-center gap-2 text-sm" style="color:#1C2B3A"><input type="checkbox" id="repEntradas" checked /> Entradas</label>
-          <label class="flex items-center gap-2 text-sm" style="color:#1C2B3A"><input type="checkbox" id="repSalidas" checked /> Salidas</label>
-          <label class="flex items-center gap-2 text-sm" style="color:#1C2B3A"><input type="checkbox" id="repTransferencias" checked /> Transferencias</label>
-        </div>
-        <div id="repMsg"></div>
-        <div class="flex gap-2">
-          <button id="repCancelar" class="flex-1 py-2 rounded-lg text-sm font-semibold" style="background:#F4F1EB; color:${COLOR}">Cancelar</button>
-          <button id="repGenerar" class="flex-1 py-2 rounded-lg text-sm font-bold text-white" style="background:${COLOR}">Generar PDF</button>
-        </div>
-      </div>`;
-    document.body.appendChild(modal);
+  pintar();
+}
 
+// ============================================================
+// Reportes (Presidente/Tesorero): Estado de cuenta y Reporte por Movimiento
+// ============================================================
+function calcularPeriodo(periodo, desde, hasta) {
+  const hoy = new Date();
+  let fechaInicio, fechaFin;
+  if (periodo === "dia") {
+    fechaInicio = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate(), 0, 0, 0);
+    fechaFin = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate(), 23, 59, 59);
+  } else if (periodo === "semana") {
+    const d = hoy.getDay() === 0 ? 7 : hoy.getDay();
+    fechaInicio = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate() - d + 1, 0, 0, 0);
+    fechaFin = new Date(fechaInicio); fechaFin.setDate(fechaInicio.getDate() + 6); fechaFin.setHours(23, 59, 59);
+  } else if (periodo === "mes") {
+    fechaInicio = new Date(hoy.getFullYear(), hoy.getMonth(), 1, 0, 0, 0);
+    fechaFin = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0, 23, 59, 59);
+  } else {
+    if (!desde || !hasta) return null;
+    fechaInicio = new Date(desde + "T00:00:00");
+    fechaFin = new Date(hasta + "T23:59:59");
+  }
+  return { fechaInicio, fechaFin };
+}
+
+async function renderReportes(main) {
+  main.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Cargando…</p>`;
+  const { data: cuentaData, error: errCuenta } = await sb.rpc("mi_cuenta_obtener", { p_usuario_id: state.usuario.id });
+  if (errCuenta) { main.innerHTML = errBox(errCuenta.message); return; }
+  const cuenta = cuentaData[0];
+  const tieneAcreimex = cuenta.saldo_acreimex !== null;
+  let opcion = "estado"; // "estado" | "movimiento"
+
+  const dinero = (n) => "$" + Number(n).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  function pintar() {
+    main.innerHTML = `
+      <h2 class="text-lg font-bold mb-4" style="color:${COLOR}">Reportes</h2>
+      <div class="max-w-md">
+        <div class="flex gap-2 mb-4">
+          <button id="opEstado" class="flex-1 py-2 rounded-lg text-sm font-semibold" style="background:${opcion === "estado" ? COLOR : "#F4F1EB"}; color:${opcion === "estado" ? "#fff" : COLOR}">Estado de cuenta</button>
+          <button id="opMov" class="flex-1 py-2 rounded-lg text-sm font-semibold" style="background:${opcion === "movimiento" ? COLOR : "#F4F1EB"}; color:${opcion === "movimiento" ? "#fff" : COLOR}">Reporte por Movimiento</button>
+        </div>
+        <div class="p-4 rounded-xl bg-white border" style="border-color:#E1DED5">
+          <p class="text-xs mb-3" style="color:#6C7B8A">${opcion === "estado"
+            ? "Incluye todos los movimientos del periodo (entradas, salidas y transferencias) con su balance."
+            : "Elige un solo tipo de movimiento para conocer el total de recursos movidos en el periodo."}</p>
+          ${tieneAcreimex ? `
+          <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Cuenta</label>
+          <select id="repCuenta" class="w-full px-3 py-2 rounded-lg text-sm mb-3 outline-none border" style="border-color:#E1DED5">
+            <option value="Caja chica">Caja chica</option>
+            <option value="Acreimex">Acreimex</option>
+          </select>` : ""}
+          ${opcion === "movimiento" ? `
+          <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Tipo de movimiento</label>
+          <select id="repTipo" class="w-full px-3 py-2 rounded-lg text-sm mb-3 outline-none border" style="border-color:#E1DED5">
+            <option value="Entrada">Entradas</option>
+            <option value="Salida">Salidas</option>
+            <option value="Transferencia">Transferencias</option>
+          </select>` : ""}
+          <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Periodo</label>
+          <select id="repPeriodo" class="w-full px-3 py-2 rounded-lg text-sm mb-2 outline-none border" style="border-color:#E1DED5">
+            <option value="dia">Hoy</option>
+            <option value="semana">Esta semana</option>
+            <option value="mes" selected>Este mes</option>
+            <option value="personalizado">Rango personalizado</option>
+          </select>
+          <div id="repRangoWrap" style="display:none" class="grid grid-cols-2 gap-2 mb-2">
+            <div>
+              <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Desde</label>
+              <input id="repDesde" type="date" class="w-full px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
+            </div>
+            <div>
+              <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Hasta</label>
+              <input id="repHasta" type="date" class="w-full px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
+            </div>
+          </div>
+          <div id="repMsg" class="mt-2"></div>
+          <button id="repGenerar" class="w-full mt-2 py-2 rounded-lg text-sm font-bold text-white" style="background:${COLOR}">${opcion === "estado" ? "Generar PDF" : "Calcular total"}</button>
+        </div>
+        <div id="repResultado" class="mt-4"></div>
+      </div>`;
+
+    document.getElementById("opEstado").addEventListener("click", () => { opcion = "estado"; pintar(); });
+    document.getElementById("opMov").addEventListener("click", () => { opcion = "movimiento"; pintar(); });
     document.getElementById("repPeriodo").addEventListener("change", (e) => {
       document.getElementById("repRangoWrap").style.display = e.target.value === "personalizado" ? "grid" : "none";
     });
+    document.getElementById("repGenerar").addEventListener("click", generar);
+  }
 
-    document.getElementById("repCancelar").addEventListener("click", () => modal.remove());
+  async function generar() {
+    const msg = document.getElementById("repMsg");
+    const res = document.getElementById("repResultado");
+    msg.innerHTML = ""; res.innerHTML = "";
 
-    document.getElementById("repGenerar").addEventListener("click", async () => {
-      const msg = document.getElementById("repMsg");
-      msg.innerHTML = "";
+    const cuentaRep = tieneAcreimex ? document.getElementById("repCuenta").value : "Caja chica";
+    const rango = calcularPeriodo(document.getElementById("repPeriodo").value,
+      document.getElementById("repDesde").value, document.getElementById("repHasta").value);
+    if (!rango) { msg.innerHTML = errBox("Selecciona las dos fechas del rango."); return; }
+    const { fechaInicio, fechaFin } = rango;
 
-      const cuentaRep = tieneAcreimex ? document.getElementById("repCuenta").value : "Caja chica";
-      const periodo = document.getElementById("repPeriodo").value;
+    msg.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Generando…</p>`;
+    const { data: historial, error: errHist } = await sb.rpc("cuenta_historial_completo", {
+      p_usuario_id: state.usuario.id, p_cuenta: cuentaRep,
+    });
+    if (errHist) { msg.innerHTML = errBox(errHist.message); return; }
+    msg.innerHTML = "";
+    const hist = historial || [];
+    const cargo = `${cuenta.rol} de ${cuenta.comite_nombre || "—"}`.toUpperCase();
 
-      let fechaInicio, fechaFin;
-      const hoy = new Date();
-      if (periodo === "dia") {
-        fechaInicio = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate(), 0, 0, 0);
-        fechaFin = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate(), 23, 59, 59);
-      } else if (periodo === "semana") {
-        const diaSemana = hoy.getDay() === 0 ? 7 : hoy.getDay();
-        fechaInicio = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate() - diaSemana + 1, 0, 0, 0);
-        fechaFin = new Date(fechaInicio); fechaFin.setDate(fechaInicio.getDate() + 6); fechaFin.setHours(23, 59, 59);
-      } else if (periodo === "mes") {
-        fechaInicio = new Date(hoy.getFullYear(), hoy.getMonth(), 1, 0, 0, 0);
-        fechaFin = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0, 23, 59, 59);
-      } else {
-        const desde = document.getElementById("repDesde").value;
-        const hasta = document.getElementById("repHasta").value;
-        if (!desde || !hasta) { msg.innerHTML = errBox("Selecciona las dos fechas del rango."); return; }
-        fechaInicio = new Date(desde + "T00:00:00");
-        fechaFin = new Date(hasta + "T23:59:59");
-      }
-
-      const tiposIncluidos = [];
-      if (document.getElementById("repEntradas").checked) tiposIncluidos.push("Entrada");
-      if (document.getElementById("repSalidas").checked) tiposIncluidos.push("Salida");
-      if (document.getElementById("repTransferencias").checked) tiposIncluidos.push("Transferencia");
-      if (tiposIncluidos.length === 0) { msg.innerHTML = errBox("Selecciona al menos un tipo de movimiento."); return; }
-
-      msg.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Generando…</p>`;
-
-      const { data: historial, error: errHist } = await sb.rpc("cuenta_historial_completo", {
-        p_usuario_id: state.usuario.id, p_cuenta: cuentaRep,
-      });
-      if (errHist) { msg.innerHTML = errBox(errHist.message); return; }
-
+    if (opcion === "estado") {
       const { data: directorData } = await sb.rpc("director_actual_obtener");
       const nombreDirector = (directorData && directorData[0] && directorData[0].nombre_completo) || "—";
-
-      const categoriaDe = (tipo) => tipo === "Entrada" ? "Entrada" : tipo === "Salida" ? "Salida" : "Transferencia";
-
       const saldoActual = cuentaRep === "Acreimex" ? Number(cuenta.saldo_acreimex) : Number(cuenta.saldo_caja_chica);
-
-      const desdeInicioHastaHoy = (historial || []).filter(h => new Date(h.creado_en) >= fechaInicio);
-      const netoDesdeInicio = desdeInicioHastaHoy.reduce((s, h) => s + (h.es_entrada ? Number(h.monto) : -Number(h.monto)), 0);
+      const netoDesdeInicio = hist.filter(h => new Date(h.creado_en) >= fechaInicio)
+        .reduce((s, h) => s + (h.es_entrada ? Number(h.monto) : -Number(h.monto)), 0);
       const balanceInicial = saldoActual - netoDesdeInicio;
-
-      const filasRango = (historial || []).filter(h => {
-        const f = new Date(h.creado_en);
-        return f >= fechaInicio && f <= fechaFin && tiposIncluidos.includes(categoriaDe(h.tipo));
-      });
-
-      let balanceCorrido = balanceInicial;
-      const filasConBalance = filasRango.map(f => {
-        balanceCorrido += f.es_entrada ? Number(f.monto) : -Number(f.monto);
-        return { ...f, balance: balanceCorrido };
-      });
+      let corrido = balanceInicial;
+      const filas = hist.filter(h => { const f = new Date(h.creado_en); return f >= fechaInicio && f <= fechaFin; })
+        .map(f => { corrido += f.es_entrada ? Number(f.monto) : -Number(f.monto); return { ...f, balance: corrido }; });
 
       generarReporteEstadoCuentaPDF({
-        titular: state.usuario.nombre_completo,
-        cargo: `${cuenta.rol} de ${cuenta.comite_nombre || "—"}`,
-        cuenta: cuentaRep,
+        titular: state.usuario.nombre_completo, cargo, cuenta: cuentaRep,
         fechaInicioTexto: fechaInicio.toLocaleDateString("es-MX"),
         fechaFinTexto: fechaFin.toLocaleDateString("es-MX"),
-        balanceInicial,
-        filas: filasConBalance,
-        directorNombre: nombreDirector,
+        balanceInicial, filas, directorNombre: nombreDirector,
       });
+      res.innerHTML = okBox("Estado de cuenta generado.");
+      return;
+    }
 
-      modal.remove();
+    // Reporte por Movimiento (un solo tipo)
+    const tipo = document.getElementById("repTipo").value;
+    const categoriaDe = (t) => t === "Entrada" ? "Entrada" : t === "Salida" ? "Salida" : "Transferencia";
+    const filas = hist.filter(h => {
+      const f = new Date(h.creado_en);
+      return f >= fechaInicio && f <= fechaFin && categoriaDe(h.tipo) === tipo;
+    });
+    const total = filas.reduce((s, h) => s + Number(h.monto), 0);
+    const enviadas = filas.filter(h => !h.es_entrada).reduce((s, h) => s + Number(h.monto), 0);
+    const recibidas = filas.filter(h => h.es_entrada).reduce((s, h) => s + Number(h.monto), 0);
+    const nombreTipo = tipo === "Entrada" ? "Entradas" : tipo === "Salida" ? "Salidas" : "Transferencias";
+    const periodoTxt = `${fechaInicio.toLocaleDateString("es-MX")} al ${fechaFin.toLocaleDateString("es-MX")}`;
+
+    res.innerHTML = `
+      <div class="p-4 rounded-xl bg-white border" style="border-color:#E1DED5">
+        <p class="text-xs" style="color:#6C7B8A">${nombreTipo} · ${cuentaRep} · ${periodoTxt}</p>
+        ${tipo === "Transferencia" ? `
+          <p class="text-sm mt-2" style="color:#1C2B3A">Enviadas: <b>${dinero(enviadas)}</b></p>
+          <p class="text-sm" style="color:#1C2B3A">Recibidas: <b>${dinero(recibidas)}</b></p>
+          <p class="text-xs mt-1" style="color:#6C7B8A">Movimientos: ${filas.length}</p>
+        ` : `
+          <p class="text-2xl font-bold mt-1" style="color:${COLOR}">${dinero(total)}</p>
+          <p class="text-xs" style="color:#6C7B8A">${filas.length} movimiento(s)</p>
+        `}
+        <button id="btnPdfMov" class="mt-3 px-3 py-1.5 rounded-lg text-xs font-semibold" style="background:#F4F1EB; color:${COLOR}">📄 Descargar PDF</button>
+      </div>`;
+
+    document.getElementById("btnPdfMov").addEventListener("click", () => {
+      const doc = new window.jspdf.jsPDF({ unit: "mm", format: "letter", orientation: "portrait" });
+      doc.setFontSize(13); doc.setFont(undefined, "bold");
+      doc.text(`REPORTE POR MOVIMIENTO: ${nombreTipo.toUpperCase()}`, 12, 14);
+      doc.setFontSize(9); doc.setFont(undefined, "normal");
+      doc.text(`Titular: ${String(state.usuario.nombre_completo).toUpperCase()}`, 12, 21);
+      doc.text(`Cargo: ${cargo}`, 12, 26);
+      doc.text(`Cuenta: ${cuentaRep}`, 12, 31);
+      doc.text(`Periodo: ${periodoTxt}`, 12, 36);
+      const resumen = tipo === "Transferencia"
+        ? `Enviadas: ${dinero(enviadas)}   Recibidas: ${dinero(recibidas)}`
+        : `Total ${nombreTipo.toLowerCase()}: ${dinero(total)}`;
+      doc.setFont(undefined, "bold"); doc.text(resumen, 12, 43); doc.setFont(undefined, "normal");
+      doc.autoTable({
+        startY: 48,
+        head: [["No.", "Fecha y hora", "Concepto", "Tipo", "Monto"]],
+        body: filas.map((f, i) => [String(i + 1),
+          new Date(f.creado_en).toLocaleString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }),
+          f.concepto || "", f.tipo, dinero(f.monto)]),
+        styles: { fontSize: 8 }, headStyles: { fillColor: [28, 43, 58] },
+        columnStyles: { 4: { halign: "right" } },
+      });
+      const tp = doc.internal.getNumberOfPages();
+      for (let p = 1; p <= tp; p++) {
+        doc.setPage(p); doc.setFontSize(8);
+        doc.text(`${p}/${tp}`, doc.internal.pageSize.getWidth() - 20, doc.internal.pageSize.getHeight() - 10);
+      }
+      doc.save(`reporte_${tipo.toLowerCase()}_${new Date().toISOString().slice(0, 10)}.pdf`);
     });
   }
 
@@ -1220,7 +1284,7 @@ function generarReporteEstadoCuentaPDF({ titular, cargo, cuenta, fechaInicioText
         doc.setFont(undefined, "normal");
         doc.setFontSize(9);
         doc.text(`Titular: ${titular}`, 12, 21);
-        doc.text(`Cargo: ${cargo}`, 12, 26);
+        doc.text(`Cargo: ${String(cargo).toUpperCase()}`, 12, 26);
         doc.text(`Cuenta: ${cuenta}`, 12, 31);
         doc.text(`Periodo: ${fechaInicioTexto} a ${fechaFinTexto}`, 12, 36);
         doc.text(`Balance inicial: $${Number(balanceInicial).toFixed(2)}`, 12, 41);
@@ -1245,13 +1309,13 @@ function generarReporteEstadoCuentaPDF({ titular, cargo, cuenta, fechaInicioText
   doc.setFont(undefined, "normal");
   doc.text("Elaboró:", 12, yFirma - 10);
   doc.line(12, yFirma, 90, yFirma);
-  doc.text(titular, 12, yFirma + 5);
-  doc.text(cargo, 12, yFirma + 10);
+  doc.text(String(titular).toUpperCase(), 12, yFirma + 5);
+  doc.text(String(cargo).toUpperCase(), 12, yFirma + 10);
 
   doc.text("Autorizó:", 125, yFirma - 10);
   doc.line(125, yFirma, 198, yFirma);
-  doc.text(directorNombre || "—", 125, yFirma + 5);
-  doc.text('Director de la Escuela Primaria "Melchor Ocampo"', 125, yFirma + 10);
+  doc.text(String(directorNombre || "—").toUpperCase(), 125, yFirma + 5);
+  doc.text('DIRECTOR DE LA ESCUELA PRIMARIA "MELCHOR OCAMPO"', 125, yFirma + 10);
 
   // Numeración X/Y en todas las páginas (se hace al final, ya con el total correcto)
   const totalPaginas = doc.internal.getNumberOfPages();
