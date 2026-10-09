@@ -723,12 +723,15 @@ async function renderCaja(main) {
 
   const [{ data: cuentaData, error: errCuenta }, { data: movsData, error: errMovs }] = await Promise.all([
     sb.rpc("mi_cuenta_obtener", { p_usuario_id: state.usuario.id }),
-    sb.rpc("mis_movimientos_listar", { p_usuario_id: state.usuario.id }),
+    sb.rpc("mis_movimientos_filtrar", { p_usuario_id: state.usuario.id, p_desde: null, p_hasta: null }),
   ]);
   if (errCuenta) { main.innerHTML = errBox(errCuenta.message); return; }
+  if (errMovs) { main.innerHTML = errBox(errMovs.message + " (¿ya ejecutaste el SQL de mis_movimientos_filtrar?)"); return; }
 
   const cuenta = cuentaData[0];
-  const movimientos = movsData || [];
+  let movimientos = movsData || [];
+  let estFiltro = { modo: "completo" };
+  let msgFiltro = "";
   const tieneAcreimex = cuenta.saldo_acreimex !== null;
   let filtroCuenta = "Todas";
 
@@ -761,13 +764,18 @@ async function renderCaja(main) {
         <div id="formMovWrap"></div>
 
         <div class="flex items-center justify-between mb-2">
-          <p class="text-sm font-semibold" style="color:${COLOR}">Movimientos recientes</p>
+          <p class="text-sm font-semibold" style="color:${COLOR}">Movimientos</p>
           ${tieneAcreimex ? `
           <select id="filtroCuentaSel" class="px-2 py-1 rounded-lg text-xs outline-none border" style="border-color:#E1DED5">
             <option value="Todas" ${filtroCuenta === "Todas" ? "selected" : ""}>Todas las cuentas</option>
             <option value="Caja chica" ${filtroCuenta === "Caja chica" ? "selected" : ""}>Solo caja chica</option>
             <option value="Acreimex" ${filtroCuenta === "Acreimex" ? "selected" : ""}>Solo Acreimex</option>
           </select>` : ""}
+        </div>
+        <div class="p-3 rounded-xl bg-white border mb-3" style="border-color:#E1DED5">
+          ${periodoControlesHTML("fm", "Todos", estFiltro)}
+          <button id="btnAplicarFiltro" class="px-3 py-1.5 rounded-lg text-xs font-bold text-white" style="background:${COLOR}">Buscar</button>
+          <div id="filtroMsg" class="mt-2">${msgFiltro}</div>
         </div>
         <div class="space-y-2">
           ${listaMostrada.length === 0 ? `<p class="text-sm" style="color:#6C7B8A">Aún no hay movimientos.</p>` : listaMostrada.map((m, i) => `
@@ -779,7 +787,7 @@ async function renderCaja(main) {
               <p class="text-xs" style="color:#1C2B3A">${m.tipo.startsWith("Transferencia") ? m.concepto : m.tipo + " — " + m.concepto}</p>
               ${m.comentarios ? `<p class="text-xs" style="color:#6C7B8A">${m.comentarios}</p>` : ""}
               <div class="flex items-center gap-3 mt-1">
-                ${m.comprobante_path ? `<button class="verComprobanteBtn text-xs underline" data-idx="${i}" style="color:${COLOR}">Ver comprobante</button>` : ""}
+                ${m.comprobante_path ? `<button class="verComprobanteBtn text-xs underline" data-idx="${i}" style="color:${COLOR}">Ver comprobante</button><button class="descargarComprobanteBtn text-xs underline" data-idx="${i}" style="color:${COLOR}">Descargar</button>` : ""}
                 ${(m.tipo === "Entrada" || m.tipo === "Salida") ? `<button class="eliminarMovBtn text-xs underline" data-idx="${i}" style="color:#B5453A">Eliminar</button>` : ""}
               </div>
             </div>`).join("")}
@@ -801,6 +809,33 @@ async function renderCaja(main) {
       if (error) { alert(error.message); return; }
       window.open(data.signedUrl, "_blank");
     }));
+
+    main.querySelectorAll(".descargarComprobanteBtn").forEach(b => b.addEventListener("click", async () => {
+      const m = listaMostrada[Number(b.dataset.idx)];
+      const ext = (m.comprobante_path.split(".").pop() || "jpg").toLowerCase();
+      const nombre = `comprobante_${m.tipo}_${new Date(m.creado_en).toISOString().slice(0, 10)}.${ext}`.replace(/\s+/g, "_");
+      const { data, error } = await sb.storage.from("comprobantes").createSignedUrl(m.comprobante_path, 300, { download: nombre });
+      if (error) { alert(error.message); return; }
+      const a = document.createElement("a");
+      a.href = data.signedUrl; a.download = nombre; document.body.appendChild(a); a.click(); a.remove();
+    }));
+
+    periodoEnlazar("fm");
+    document.getElementById("btnAplicarFiltro").addEventListener("click", async () => {
+      const r = periodoLeer("fm");
+      if (r.error) { document.getElementById("filtroMsg").innerHTML = errBox(r.error); return; }
+      estFiltro = { modo: r.modo, mes: r.mes, anio: r.anio, desde: r.desde, hasta: r.hasta };
+      document.getElementById("filtroMsg").innerHTML = `<p class="text-xs" style="color:#6C7B8A">Buscando…</p>`;
+      const { data, error } = await sb.rpc("mis_movimientos_filtrar", {
+        p_usuario_id: state.usuario.id,
+        p_desde: r.modo === "completo" ? null : r.fechaInicio.toISOString(),
+        p_hasta: r.modo === "completo" ? null : r.fechaFin.toISOString(),
+      });
+      if (error) { document.getElementById("filtroMsg").innerHTML = errBox(error.message); return; }
+      movimientos = data || [];
+      msgFiltro = "";
+      pintar();
+    });
 
     main.querySelectorAll(".eliminarMovBtn").forEach(b => b.addEventListener("click", () => {
       mostrarFormEliminarMovimiento(listaMostrada[Number(b.dataset.idx)]);
@@ -1053,36 +1088,101 @@ async function renderCaja(main) {
 }
 
 // ============================================================
-// Reportes (Presidente/Tesorero): Estado de cuenta y Reporte por Movimiento
+// Helpers compartidos de periodo (Completo / Mensual / Personalizado)
 // ============================================================
-function calcularPeriodo(periodo, desde, hasta) {
+const MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+
+function periodoControlesHTML(id, etiquetaCompleto, est) {
+  est = est || {};
   const hoy = new Date();
-  let fechaInicio, fechaFin;
-  if (periodo === "dia") {
-    fechaInicio = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate(), 0, 0, 0);
-    fechaFin = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate(), 23, 59, 59);
-  } else if (periodo === "semana") {
-    const d = hoy.getDay() === 0 ? 7 : hoy.getDay();
-    fechaInicio = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate() - d + 1, 0, 0, 0);
-    fechaFin = new Date(fechaInicio); fechaFin.setDate(fechaInicio.getDate() + 6); fechaFin.setHours(23, 59, 59);
-  } else if (periodo === "mes") {
-    fechaInicio = new Date(hoy.getFullYear(), hoy.getMonth(), 1, 0, 0, 0);
-    fechaFin = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0, 23, 59, 59);
-  } else {
-    if (!desde || !hasta) return null;
-    fechaInicio = new Date(desde + "T00:00:00");
-    fechaFin = new Date(hasta + "T23:59:59");
-  }
-  return { fechaInicio, fechaFin };
+  const modo = est.modo || "completo";
+  const mes = est.mes !== undefined ? est.mes : hoy.getMonth();
+  const anio = est.anio !== undefined ? est.anio : hoy.getFullYear();
+  const estilo = 'border-color:#E1DED5';
+  const anios = [];
+  for (let a = hoy.getFullYear(); a >= hoy.getFullYear() - 4; a--) anios.push(a);
+  return `
+    <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Periodo</label>
+    <select id="${id}Modo" class="w-full px-3 py-2 rounded-lg text-sm mb-2 outline-none border" style="${estilo}">
+      <option value="completo" ${modo === "completo" ? "selected" : ""}>${etiquetaCompleto}</option>
+      <option value="mensual" ${modo === "mensual" ? "selected" : ""}>Mensual</option>
+      <option value="personalizado" ${modo === "personalizado" ? "selected" : ""}>Periodo personalizado</option>
+    </select>
+    <div id="${id}MesWrap" style="display:${modo === "mensual" ? "grid" : "none"}" class="grid grid-cols-2 gap-2 mb-2">
+      <select id="${id}Mes" class="px-2 py-2 rounded-lg text-sm outline-none border" style="${estilo}">
+        ${MESES.map((m, i) => `<option value="${i}" ${i === mes ? "selected" : ""}>${m}</option>`).join("")}
+      </select>
+      <select id="${id}Anio" class="px-2 py-2 rounded-lg text-sm outline-none border" style="${estilo}">
+        ${anios.map(a => `<option value="${a}" ${a === anio ? "selected" : ""}>${a}</option>`).join("")}
+      </select>
+    </div>
+    <div id="${id}RangoWrap" style="display:${modo === "personalizado" ? "grid" : "none"}" class="grid grid-cols-2 gap-2 mb-2">
+      <div>
+        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Desde</label>
+        <input id="${id}Desde" type="date" value="${est.desde || ""}" class="w-full px-2 py-1.5 rounded-lg text-sm outline-none border" style="${estilo}" />
+      </div>
+      <div>
+        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Hasta</label>
+        <input id="${id}Hasta" type="date" value="${est.hasta || ""}" class="w-full px-2 py-1.5 rounded-lg text-sm outline-none border" style="${estilo}" />
+      </div>
+    </div>`;
 }
 
+function periodoEnlazar(id) {
+  document.getElementById(id + "Modo").addEventListener("change", (e) => {
+    document.getElementById(id + "MesWrap").style.display = e.target.value === "mensual" ? "grid" : "none";
+    document.getElementById(id + "RangoWrap").style.display = e.target.value === "personalizado" ? "grid" : "none";
+  });
+}
+
+function periodoLeer(id) {
+  const modo = document.getElementById(id + "Modo").value;
+  const mes = Number(document.getElementById(id + "Mes").value);
+  const anio = Number(document.getElementById(id + "Anio").value);
+  const desde = document.getElementById(id + "Desde").value;
+  const hasta = document.getElementById(id + "Hasta").value;
+  const base = { modo, mes, anio, desde, hasta };
+  if (modo === "completo") {
+    const fin = new Date(); fin.setHours(23, 59, 59, 999);
+    return { ...base, fechaInicio: new Date(2000, 0, 1), fechaFin: fin, texto: "Completo" };
+  }
+  if (modo === "mensual") {
+    return { ...base, fechaInicio: new Date(anio, mes, 1, 0, 0, 0), fechaFin: new Date(anio, mes + 1, 0, 23, 59, 59), texto: `${MESES[mes]} ${anio}` };
+  }
+  if (!desde || !hasta) return { ...base, error: "Selecciona las dos fechas del rango." };
+  const fi = new Date(desde + "T00:00:00"), ff = new Date(hasta + "T23:59:59");
+  if (fi > ff) return { ...base, error: "La fecha de inicio no puede ser posterior a la fecha final." };
+  return { ...base, fechaInicio: fi, fechaFin: ff, texto: "Personalizado" };
+}
+
+// hist = movimientos de la cuenta en orden ascendente (es_entrada, monto, creado_en)
+function construirEstadoCuenta(hist, saldoActual, rango) {
+  const neto = hist.filter(h => new Date(h.creado_en) >= rango.fechaInicio)
+    .reduce((s, h) => s + (h.es_entrada ? Number(h.monto) : -Number(h.monto)), 0);
+  const balanceInicial = Number(saldoActual) - neto;
+  let corrido = balanceInicial;
+  const filas = hist.filter(h => { const f = new Date(h.creado_en); return f >= rango.fechaInicio && f <= rango.fechaFin; })
+    .map(f => { corrido += f.es_entrada ? Number(f.monto) : -Number(f.monto); return { ...f, balance: corrido }; });
+  const ini = rango.modo === "completo" ? (hist.length ? new Date(hist[0].creado_en) : new Date()) : rango.fechaInicio;
+  const fin = rango.modo === "completo" ? new Date() : rango.fechaFin;
+  return {
+    balanceInicial, filas,
+    fechaInicioTexto: ini.toLocaleDateString("es-MX"),
+    fechaFinTexto: fin.toLocaleDateString("es-MX"),
+  };
+}
+
+// ============================================================
+// Reportes (Presidente/Tesorero): Estado de cuenta y Reporte por Movimiento
+// ============================================================
 async function renderReportes(main) {
   main.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Cargando…</p>`;
   const { data: cuentaData, error: errCuenta } = await sb.rpc("mi_cuenta_obtener", { p_usuario_id: state.usuario.id });
   if (errCuenta) { main.innerHTML = errBox(errCuenta.message); return; }
   const cuenta = cuentaData[0];
   const tieneAcreimex = cuenta.saldo_acreimex !== null;
-  let opcion = "estado"; // "estado" | "movimiento"
+  let opcion = "estado";
+  let estPeriodo = { modo: "completo" };
 
   const dinero = (n) => "$" + Number(n).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -1111,23 +1211,7 @@ async function renderReportes(main) {
             <option value="Salida">Salidas</option>
             <option value="Transferencia">Transferencias</option>
           </select>` : ""}
-          <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Periodo</label>
-          <select id="repPeriodo" class="w-full px-3 py-2 rounded-lg text-sm mb-2 outline-none border" style="border-color:#E1DED5">
-            <option value="dia">Hoy</option>
-            <option value="semana">Esta semana</option>
-            <option value="mes" selected>Este mes</option>
-            <option value="personalizado">Rango personalizado</option>
-          </select>
-          <div id="repRangoWrap" style="display:none" class="grid grid-cols-2 gap-2 mb-2">
-            <div>
-              <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Desde</label>
-              <input id="repDesde" type="date" class="w-full px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
-            </div>
-            <div>
-              <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Hasta</label>
-              <input id="repHasta" type="date" class="w-full px-2 py-1.5 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
-            </div>
-          </div>
+          ${periodoControlesHTML("rep", "Completo (desde el primer movimiento)", estPeriodo)}
           <div id="repMsg" class="mt-2"></div>
           <button id="repGenerar" class="w-full mt-2 py-2 rounded-lg text-sm font-bold text-white" style="background:${COLOR}">${opcion === "estado" ? "Generar PDF" : "Calcular total"}</button>
         </div>
@@ -1136,9 +1220,7 @@ async function renderReportes(main) {
 
     document.getElementById("opEstado").addEventListener("click", () => { opcion = "estado"; pintar(); });
     document.getElementById("opMov").addEventListener("click", () => { opcion = "movimiento"; pintar(); });
-    document.getElementById("repPeriodo").addEventListener("change", (e) => {
-      document.getElementById("repRangoWrap").style.display = e.target.value === "personalizado" ? "grid" : "none";
-    });
+    periodoEnlazar("rep");
     document.getElementById("repGenerar").addEventListener("click", generar);
   }
 
@@ -1148,10 +1230,9 @@ async function renderReportes(main) {
     msg.innerHTML = ""; res.innerHTML = "";
 
     const cuentaRep = tieneAcreimex ? document.getElementById("repCuenta").value : "Caja chica";
-    const rango = calcularPeriodo(document.getElementById("repPeriodo").value,
-      document.getElementById("repDesde").value, document.getElementById("repHasta").value);
-    if (!rango) { msg.innerHTML = errBox("Selecciona las dos fechas del rango."); return; }
-    const { fechaInicio, fechaFin } = rango;
+    const rango = periodoLeer("rep");
+    if (rango.error) { msg.innerHTML = errBox(rango.error); return; }
+    estPeriodo = { modo: rango.modo, mes: rango.mes, anio: rango.anio, desde: rango.desde, hasta: rango.hasta };
 
     msg.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Generando…</p>`;
     const { data: historial, error: errHist } = await sb.rpc("cuenta_historial_completo", {
@@ -1165,19 +1246,12 @@ async function renderReportes(main) {
     if (opcion === "estado") {
       const { data: directorData } = await sb.rpc("director_actual_obtener");
       const nombreDirector = (directorData && directorData[0] && directorData[0].nombre_completo) || "—";
-      const saldoActual = cuentaRep === "Acreimex" ? Number(cuenta.saldo_acreimex) : Number(cuenta.saldo_caja_chica);
-      const netoDesdeInicio = hist.filter(h => new Date(h.creado_en) >= fechaInicio)
-        .reduce((s, h) => s + (h.es_entrada ? Number(h.monto) : -Number(h.monto)), 0);
-      const balanceInicial = saldoActual - netoDesdeInicio;
-      let corrido = balanceInicial;
-      const filas = hist.filter(h => { const f = new Date(h.creado_en); return f >= fechaInicio && f <= fechaFin; })
-        .map(f => { corrido += f.es_entrada ? Number(f.monto) : -Number(f.monto); return { ...f, balance: corrido }; });
-
+      const saldoActual = cuentaRep === "Acreimex" ? cuenta.saldo_acreimex : cuenta.saldo_caja_chica;
+      const est = construirEstadoCuenta(hist, saldoActual, rango);
       generarReporteEstadoCuentaPDF({
         titular: state.usuario.nombre_completo, cargo, cuenta: cuentaRep,
-        fechaInicioTexto: fechaInicio.toLocaleDateString("es-MX"),
-        fechaFinTexto: fechaFin.toLocaleDateString("es-MX"),
-        balanceInicial, filas, directorNombre: nombreDirector,
+        fechaInicioTexto: est.fechaInicioTexto, fechaFinTexto: est.fechaFinTexto,
+        balanceInicial: est.balanceInicial, filas: est.filas, directorNombre: nombreDirector,
       });
       res.innerHTML = okBox("Estado de cuenta generado.");
       return;
@@ -1188,13 +1262,16 @@ async function renderReportes(main) {
     const categoriaDe = (t) => t === "Entrada" ? "Entrada" : t === "Salida" ? "Salida" : "Transferencia";
     const filas = hist.filter(h => {
       const f = new Date(h.creado_en);
-      return f >= fechaInicio && f <= fechaFin && categoriaDe(h.tipo) === tipo;
+      return f >= rango.fechaInicio && f <= rango.fechaFin && categoriaDe(h.tipo) === tipo;
     });
     const total = filas.reduce((s, h) => s + Number(h.monto), 0);
     const enviadas = filas.filter(h => !h.es_entrada).reduce((s, h) => s + Number(h.monto), 0);
     const recibidas = filas.filter(h => h.es_entrada).reduce((s, h) => s + Number(h.monto), 0);
     const nombreTipo = tipo === "Entrada" ? "Entradas" : tipo === "Salida" ? "Salidas" : "Transferencias";
-    const periodoTxt = `${fechaInicio.toLocaleDateString("es-MX")} al ${fechaFin.toLocaleDateString("es-MX")}`;
+    const periodoTxt = rango.modo === "completo"
+      ? `Completo (hasta ${new Date().toLocaleDateString("es-MX")})`
+      : rango.modo === "mensual" ? rango.texto
+      : `${rango.fechaInicio.toLocaleDateString("es-MX")} al ${rango.fechaFin.toLocaleDateString("es-MX")}`;
 
     res.innerHTML = `
       <div class="p-4 rounded-xl bg-white border" style="border-color:#E1DED5">
