@@ -219,34 +219,32 @@ async function pantallaLista() {
 function pantallaConsulta(c) {
   state.sel = c;
   app.innerHTML = `
-    <button id="volver" class="text-xs underline mb-3" style="color:${COLOR}">← Volver al listado</button>
-    <p class="text-sm font-semibold mb-3" style="color:${COLOR}">${etiquetaCargo(c)}</p>
-    <div class="p-4 rounded-xl bg-white border" style="border-color:#E1DED5">
-      ${c.tiene_acreimex ? `
-      <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Cuenta</label>
-      <select id="pubCuenta" class="w-full px-3 py-2 rounded-lg text-sm mb-3 outline-none border" style="border-color:#E1DED5">
-        <option value="Caja chica">Caja chica</option>
-        <option value="Acreimex">Acreimex</option>
-      </select>` : ""}
-      ${periodoControlesHTML("pub", "Completo (desde el primer movimiento)", { modo: "completo" })}
-      <div id="pubMsg" class="mt-2"></div>
-      <button id="pubVer" class="w-full mt-2 py-2 rounded-lg text-sm font-bold text-white" style="background:${COLOR}">Ver estado de cuenta</button>
-    </div>
+    <button id="volver" class="text-sm underline mb-3" style="color:${COLOR}">← Volver al listado</button>
+    <p class="text-base font-bold mb-3" style="color:${COLOR}">${etiquetaCargo(c)}</p>
+    ${c.tiene_acreimex ? `
+      <p class="text-sm mb-2" style="color:#1C2B3A">¿De qué cuenta quieres ver el estado de cuenta?</p>
+      <div class="space-y-2 mb-2">
+        <button class="cuentaBtn w-full px-4 py-3 rounded-xl text-sm font-bold text-white" data-cuenta="Caja chica" style="background:${COLOR}">CAJA CHICA</button>
+        <button class="cuentaBtn w-full px-4 py-3 rounded-xl text-sm font-bold text-white" data-cuenta="Acreimex" style="background:${COLOR}">ACREIMEX</button>
+      </div>` : ""}
+    <div id="pubMsg" class="mt-2"></div>
     <div id="pubResultado" class="mt-4"></div>`;
   document.getElementById("volver").addEventListener("click", pantallaLista);
-  periodoEnlazar("pub");
-  document.getElementById("pubVer").addEventListener("click", consultar);
+  if (c.tiene_acreimex) {
+    app.querySelectorAll(".cuentaBtn").forEach(b => b.addEventListener("click", () => consultar(b.dataset.cuenta)));
+  } else {
+    consultar("Caja chica");
+  }
 }
 
-async function consultar() {
+async function consultar(cuenta) {
   const c = state.sel;
   const msg = document.getElementById("pubMsg");
   const res = document.getElementById("pubResultado");
   msg.innerHTML = ""; res.innerHTML = "";
-  const cuenta = c.tiene_acreimex ? document.getElementById("pubCuenta").value : "Caja chica";
-  const rango = periodoLeer("pub");
-  if (rango.error) { msg.innerHTML = errBox(rango.error); return; }
-  msg.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Consultando…</p>`;
+  const finHoy = new Date(); finHoy.setHours(23, 59, 59, 999);
+  const rango = { modo: "completo", fechaInicio: new Date(2000, 0, 1), fechaFin: finHoy };
+  msg.innerHTML = `<p class="text-sm" style="color:#6C7B8A">Consultando…</p>`;
 
   const [{ data: info, error: e1 }, { data: hist, error: e2 }] = await Promise.all([
     sb.rpc("publico_cuenta_info", { p_usuario_id: c.usuario_id, p_cuenta: cuenta }),
@@ -272,7 +270,7 @@ async function consultar() {
         <div>Entradas<br><b style="color:#3F7A5E">${dinero(totEnt)}</b></div>
         <div>Salidas<br><b style="color:#B5453A">${dinero(totSal)}</b></div>
       </div>
-      <button id="pubPdf" class="mb-3 px-3 py-1.5 rounded-lg text-xs font-bold text-white" style="background:${COLOR}">📄 Descargar PDF</button>
+      <button id="pubPdf" class="w-full mb-3 py-3 rounded-xl text-sm font-bold text-white" style="background:#3F7A5E">📄 Descargar PDF</button>
       <div class="space-y-2">
         ${est.filas.length === 0 ? `<p class="text-sm" style="color:#6C7B8A">Sin movimientos en este periodo.</p>` : est.filas.map(f => `
           <div class="p-2 rounded-lg border" style="border-color:#E1DED5">
