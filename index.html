@@ -7,6 +7,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js"></script>
+<script src="https://unpkg.com/qrcode@1.5.0/build/qrcode.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -298,6 +299,7 @@ const MENU = [
   { id: "solicitudes", label: "Solicitudes de recuperación", roles: ["Super Administrador", "Director"] },
   { id: "caja", label: "Mi caja", roles: ["Presidente", "Tesorero"] },
   { id: "reportes", label: "Reportes", roles: ["Presidente", "Tesorero"] },
+  { id: "transparencia", label: "Transparencia", roles: ["Super Administrador", "Director"] },
   { id: "logs", label: "Bitácora", roles: ["Super Administrador", "Director"] },
 ];
 
@@ -334,6 +336,7 @@ function renderApp(seccion) {
   if (activa === "solicitudes") return renderSolicitudes(main);
   if (activa === "caja") return renderCaja(main);
   if (activa === "reportes") return renderReportes(main);
+  if (activa === "transparencia") return renderTransparencia(main);
   if (activa === "logs") return renderLogs(main);
 }
 
@@ -1170,6 +1173,65 @@ function construirEstadoCuenta(hist, saldoActual, rango) {
     fechaInicioTexto: ini.toLocaleDateString("es-MX"),
     fechaFinTexto: fin.toLocaleDateString("es-MX"),
   };
+}
+
+
+// ============================================================
+// Transparencia (Director / Super Administrador): enlace por WhatsApp y QR imprimible
+// ============================================================
+function urlTransparencia() {
+  return location.href.split("#")[0].split("?")[0].replace(/[^\/]*$/, "") + "transparencia.html";
+}
+
+function renderTransparencia(main) {
+  const url = urlTransparencia();
+  const mensaje = `Estimado Padre de familia o Tutor:\n\nPor medio del siguiente enlace puede usted consultar y descargar, en archivo PDF, el estado de cuenta de los diferentes comités activos en nuestra institución, para su conocimiento y transparencia en la administración de los recursos.\n\n${url}`;
+
+  main.innerHTML = `
+    <h2 class="text-lg font-bold mb-4" style="color:${COLOR}">Transparencia</h2>
+    <div class="max-w-md space-y-4">
+      <div class="p-4 rounded-xl bg-white border" style="border-color:#E1DED5">
+        <p class="text-sm font-semibold mb-1" style="color:${COLOR}">Enviar enlace por WhatsApp</p>
+        <p class="text-xs mb-2" style="color:#6C7B8A">Se abre WhatsApp con el mensaje listo; tú eliges a quién enviarlo.</p>
+        <pre class="text-xs p-2 rounded-lg mb-3 whitespace-pre-wrap" style="background:#F4F1EB; color:#1C2B3A; font-family:inherit">${mensaje.replace(/</g, "&lt;")}</pre>
+        <button id="btnWaTransp" class="w-full py-2 rounded-lg text-sm font-bold text-white" style="background:#3F7A5E">Enviar por WhatsApp</button>
+      </div>
+      <div class="p-4 rounded-xl bg-white border" style="border-color:#E1DED5">
+        <p class="text-sm font-semibold mb-1" style="color:${COLOR}">Código QR para imprimir</p>
+        <p class="text-xs mb-3" style="color:#6C7B8A">Hoja tamaño carta, vertical, con el QR grande y centrado.</p>
+        <div class="flex justify-center mb-3"><canvas id="qrPreview" style="width:220px;height:220px"></canvas></div>
+        <div id="qrMsg"></div>
+        <button id="btnQrPdf" class="w-full py-2 rounded-lg text-sm font-bold text-white" style="background:${COLOR}">📄 Descargar PDF del QR</button>
+      </div>
+    </div>`;
+
+  document.getElementById("btnWaTransp").addEventListener("click", () => {
+    window.open("https://wa.me/?text=" + encodeURIComponent(mensaje), "_blank");
+  });
+
+  const msg = document.getElementById("qrMsg");
+  if (typeof QRCode === "undefined") { msg.innerHTML = errBox("No se pudo cargar el generador de QR. Revisa tu conexión y recarga."); return; }
+  QRCode.toCanvas(document.getElementById("qrPreview"), url, { width: 660, margin: 2, errorCorrectionLevel: "M" }, (err) => {
+    if (err) msg.innerHTML = errBox(err.message);
+  });
+
+  document.getElementById("btnQrPdf").addEventListener("click", async () => {
+    try {
+      const dataUrl = await QRCode.toDataURL(url, { width: 1400, margin: 2, errorCorrectionLevel: "M" });
+      const doc = new window.jspdf.jsPDF({ unit: "mm", format: "letter", orientation: "portrait" });
+      const W = doc.internal.pageSize.getWidth();
+      const H = doc.internal.pageSize.getHeight();
+      doc.setFont(undefined, "bold");
+      doc.setFontSize(22);
+      const lineas = doc.splitTextToSize("PÁGINA DE TRANSPARENCIA DE LOS DIVERSOS COMITÉS DE NUESTRA INSTITUCIÓN", W - 40);
+      doc.text(lineas, W / 2, 40, { align: "center" });
+      const lado = 150;
+      doc.addImage(dataUrl, "PNG", (W - lado) / 2, (H - lado) / 2 + 10, lado, lado);
+      doc.save("qr_transparencia_comites.pdf");
+    } catch (e) {
+      msg.innerHTML = errBox(e.message);
+    }
+  });
 }
 
 // ============================================================
