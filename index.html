@@ -34,8 +34,208 @@ const state = {
 
 const app = document.getElementById("app");
 
-function errBox(t) { return `<div class="text-xs mb-3 p-2 rounded-lg" style="background:#F5E4E1; color:#B5453A">${t}</div>`; }
+// ============================================================
+// Traductor central de avisos (todo se muestra en español)
+// ============================================================
+const TRADUCCIONES = [
+  [/failed to fetch|networkerror|network request failed|load failed|fetch failed|err_internet_disconnected|network error/i,
+    "No se pudo conectar con el servidor. Revisa tu conexión a internet e inténtalo de nuevo."],
+  [/timeout|timed out|etimedout/i,
+    "La operación tardó demasiado en responder. Revisa tu conexión e inténtalo de nuevo."],
+  [/invalid api key|invalid apikey|no api key/i,
+    "La llave de conexión con la base de datos no es válida. Avisa al administrador del sistema."],
+  [/jwt expired|invalid jwt|jwt malformed|token (is )?expired|session (has )?expired|not authenticated/i,
+    "Tu sesión expiró o no es válida. Cierra sesión y vuelve a entrar."],
+  [/row-level security|row level security|permission denied|not authorized|unauthorized|forbidden|insufficient privilege/i,
+    "No tienes permiso para realizar esta acción."],
+  [/could not find the function|schema cache|pgrst202|function .* does not exist/i,
+    "Falta una función en la base de datos. Avisa al administrador del sistema."],
+  [/relation .* does not exist|column .* does not exist|could not find the .* column/i,
+    "Falta una tabla o columna en la base de datos. Avisa al administrador del sistema."],
+  [/duplicate key|already exists|unique constraint/i,
+    "Ya existe un registro con esos datos."],
+  [/foreign key/i,
+    "No se puede completar la acción porque este registro está relacionado con otra información."],
+  [/null value in column|not-null constraint/i,
+    "Falta capturar información obligatoria."],
+  [/check constraint/i,
+    "Alguno de los datos capturados no es válido."],
+  [/invalid input (syntax|value)|malformed|invalid uuid|out of range/i,
+    "Alguno de los datos capturados tiene un formato no válido."],
+  [/exceeded the maximum allowed size|payload too large|entity too large|maximum allowed size/i,
+    "El archivo es demasiado grande. El máximo permitido es de 5 MB."],
+  [/mime type|invalid file type|unsupported/i,
+    "Tipo de archivo no permitido. Solo se aceptan imágenes."],
+  [/bucket not found/i,
+    "No se encontró el almacén de comprobantes. Avisa al administrador del sistema."],
+  [/too many requests|rate limit/i,
+    "Demasiados intentos seguidos. Espera un momento e inténtalo de nuevo."],
+  [/internal server error|bad gateway|service unavailable|gateway timeout|upstream/i,
+    "El servidor tiene un problema temporal. Inténtalo de nuevo en unos minutos."],
+  [/unexpected token|unexpected end of json|json/i,
+    "El servidor respondió de forma inesperada. Inténtalo de nuevo."],
+  [/abort/i,
+    "La operación fue cancelada."],
+  [/object not found|not found/i,
+    "No se encontró la información solicitada."],
+];
+const REGEX_RED = TRADUCCIONES[0][0];
+const REGEX_INGLES = /\b(the|is|are|not|cannot|could|failed|invalid|unable|must|already|exists|does|violates|permission|denied|constraint|expected|unexpected|missing|required)\b/i;
+
+function textoDeError(e) {
+  if (e == null) return "";
+  if (typeof e === "string") return e;
+  return String(e.message || e.error_description || e.msg || e);
+}
+function esErrorDeRed(e) {
+  return REGEX_RED.test(textoDeError(e));
+}
+function traducirMensaje(t) {
+  const texto = textoDeError(t);
+  for (const [re, es] of TRADUCCIONES) {
+    if (re.test(texto)) return es;
+  }
+  if (REGEX_INGLES.test(texto)) {
+    console.warn("Mensaje sin traducir:", texto);
+    return "Ocurrió un problema inesperado. Inténtalo de nuevo; si continúa, avisa al administrador del sistema.";
+  }
+  return texto;
+}
+const traducirError = traducirMensaje;
+
+function errBox(t) { return `<div class="text-xs mb-3 p-2 rounded-lg" style="background:#F5E4E1; color:#B5453A">${traducirMensaje(t)}</div>`; }
 function okBox(t) { return `<div class="text-xs mb-3 p-2 rounded-lg" style="background:#E6F0EA; color:#3F7A5E">${t}</div>`; }
+
+// ============================================================
+// Avisos flotantes (errores inesperados, sin conexión, etc.)
+// ============================================================
+function avisoGlobal(texto, tipo) {
+  const fondo = tipo === "ok" ? "#E6F0EA" : "#F5E4E1";
+  const color = tipo === "ok" ? "#3F7A5E" : "#B5453A";
+  const el = document.createElement("div");
+  el.style.cssText = `position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:120;max-width:90vw;padding:10px 14px;border-radius:12px;font-size:13px;box-shadow:0 4px 14px rgba(0,0,0,.15);background:${fondo};color:${color}`;
+  el.textContent = texto;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 5000);
+}
+
+window.addEventListener("unhandledrejection", (e) => {
+  console.error(e.reason);
+  avisoGlobal(traducirError(e.reason), "error");
+});
+
+window.addEventListener("offline", () => {
+  if (document.getElementById("bannerOffline")) return;
+  const b = document.createElement("div");
+  b.id = "bannerOffline";
+  b.style.cssText = "position:fixed;bottom:0;left:0;right:0;z-index:120;padding:8px 12px;text-align:center;font-size:13px;font-weight:600;background:#B5453A;color:#fff";
+  b.textContent = "Sin conexión a internet. Revisa tu red; los cambios no se guardarán hasta que regrese.";
+  document.body.appendChild(b);
+});
+window.addEventListener("online", () => {
+  const b = document.getElementById("bannerOffline");
+  if (b) { b.remove(); avisoGlobal("Conexión restablecida.", "ok"); }
+});
+
+// ============================================================
+// Barra de progreso dinámica (cargas, guardados, modificaciones)
+// ============================================================
+let _progContador = 0;
+let _progAncho = 0;
+let _progIntervalo = null;
+let _progOcultar = null;
+
+function _progElemento() {
+  let el = document.getElementById("progresoGlobal");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "progresoGlobal";
+    el.style.cssText = "position:fixed;inset:0;z-index:100;display:none;align-items:center;justify-content:center;padding:16px;background:rgba(28,43,58,0.45)";
+    el.innerHTML = `
+      <div class="w-full max-w-xs rounded-2xl bg-white p-5" role="status" aria-live="polite">
+        <p id="progresoTexto" class="text-sm font-semibold mb-3 text-center" style="color:${COLOR}"></p>
+        <div class="w-full h-2.5 rounded-full overflow-hidden" style="background:#E1DED5">
+          <div id="progresoBarra" class="h-full rounded-full" style="width:0%; background:${COLOR}; transition:width .25s ease"></div>
+        </div>
+        <p class="text-xs mt-2 text-center" style="color:#6C7B8A">Por favor espera…</p>
+      </div>`;
+    document.body.appendChild(el);
+  }
+  return el;
+}
+
+function mostrarProgreso(texto) {
+  const el = _progElemento();
+  if (_progOcultar) { clearTimeout(_progOcultar); _progOcultar = null; }
+  _progContador++;
+  document.getElementById("progresoTexto").textContent = texto;
+  if (_progContador === 1) {
+    _progAncho = 0;
+    document.getElementById("progresoBarra").style.width = "0%";
+    el.style.display = "flex";
+    clearInterval(_progIntervalo);
+    _progIntervalo = setInterval(() => {
+      _progAncho += (90 - _progAncho) * 0.08;
+      const barra = document.getElementById("progresoBarra");
+      if (barra) barra.style.width = _progAncho.toFixed(1) + "%";
+    }, 120);
+  }
+}
+
+function actualizarProgreso(texto) {
+  const t = document.getElementById("progresoTexto");
+  if (t) t.textContent = texto;
+}
+
+function ocultarProgreso() {
+  _progContador = Math.max(0, _progContador - 1);
+  if (_progContador > 0) return;
+  clearInterval(_progIntervalo);
+  _progIntervalo = null;
+  const barra = document.getElementById("progresoBarra");
+  if (barra) barra.style.width = "100%";
+  _progOcultar = setTimeout(() => {
+    const el = document.getElementById("progresoGlobal");
+    if (el) el.style.display = "none";
+    _progOcultar = null;
+  }, 250);
+}
+
+// Ejecuta una operación mostrando la barra con su descripción
+async function conProgreso(texto, fn) {
+  mostrarProgreso(texto);
+  await new Promise(r => setTimeout(r, 40)); // deja que la barra se pinte antes de trabajo pesado
+  try {
+    return await fn();
+  } finally {
+    ocultarProgreso();
+  }
+}
+
+// ============================================================
+// Campo de contraseña con ojito (mostrar / ocultar)
+// ============================================================
+const ICONO_OJO = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+const ICONO_OJO_TACHADO = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`;
+
+function campoPassword(id, claseMargen, autocompletar) {
+  return `
+    <div class="relative ${claseMargen || "mb-3"}">
+      <input id="${id}" type="password" autocomplete="${autocompletar || "off"}" class="w-full px-3 py-2 pr-10 rounded-lg text-sm outline-none border" style="border-color:#E1DED5" />
+      <button type="button" class="ojitoBtn absolute inset-y-0 right-0 px-3 flex items-center" data-target="${id}" aria-label="Mostrar contraseña" style="color:#6C7B8A">${ICONO_OJO}</button>
+    </div>`;
+}
+
+document.addEventListener("click", (e) => {
+  const b = e.target.closest(".ojitoBtn");
+  if (!b) return;
+  const input = document.getElementById(b.dataset.target);
+  if (!input) return;
+  const mostrar = input.type === "password";
+  input.type = mostrar ? "text" : "password";
+  b.innerHTML = mostrar ? ICONO_OJO_TACHADO : ICONO_OJO;
+  b.setAttribute("aria-label", mostrar ? "Ocultar contraseña" : "Mostrar contraseña");
+});
 
 // Usuario (login): solo letras y números, sin espacios ni caracteres especiales
 function filtrarUsuarioLogin(valor) {
@@ -111,7 +311,7 @@ function init() {
   const guardado = sessionStorage.getItem("comite_usuario");
   if (guardado) {
     state.usuario = JSON.parse(guardado);
-    renderApp();
+    renderApp(); // siempre abre en INICIO
   } else {
     renderLogin();
   }
@@ -120,7 +320,10 @@ function init() {
 // ============================================================
 // Login
 // ============================================================
+let iniciandoSesion = false;
+
 function renderLogin(mensajeExtra) {
+  iniciandoSesion = false;
   app.innerHTML = `
     <div class="min-h-screen flex items-center justify-center p-5">
       <div class="w-full max-w-sm p-6 rounded-2xl bg-white border" style="border-color:#E1DED5">
@@ -130,9 +333,9 @@ function renderLogin(mensajeExtra) {
         </div>
         ${mensajeExtra || ""}
         <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Usuario</label>
-        <input id="loginUsuario" class="w-full px-3 py-2 rounded-lg text-sm mb-3 outline-none border" style="border-color:#E1DED5" />
+        <input id="loginUsuario" autocomplete="username" class="w-full px-3 py-2 rounded-lg text-sm mb-3 outline-none border" style="border-color:#E1DED5" />
         <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Contraseña</label>
-        <input id="loginPassword" type="password" class="w-full px-3 py-2 rounded-lg text-sm mb-2 outline-none border" style="border-color:#E1DED5" />
+        ${campoPassword("loginPassword", "mb-2", "current-password")}
         <button id="olvideBtn" type="button" class="text-xs mb-3 underline" style="color:${COLOR}">¿Olvidaste tu contraseña?</button>
         <div id="loginMsg"></div>
         <button id="loginBtn" class="w-full py-2.5 rounded-lg text-sm font-bold text-white" style="background:${COLOR}">Entrar</button>
@@ -145,18 +348,41 @@ function renderLogin(mensajeExtra) {
 }
 
 async function iniciarSesion() {
+  if (iniciandoSesion) return; // evita varios clics / Enter mientras ya está entrando
+
   const usuario = document.getElementById("loginUsuario").value.trim();
   const password = document.getElementById("loginPassword").value;
   const msg = document.getElementById("loginMsg");
+  const btn = document.getElementById("loginBtn");
   msg.innerHTML = "";
   if (!usuario || !password) { msg.innerHTML = errBox("Escribe tu usuario y contraseña."); return; }
 
-  const { data, error } = await sb.rpc("login_comite", { p_usuario: usuario, p_password: password });
+  iniciandoSesion = true;
+  btn.disabled = true;
+  btn.textContent = "Entrando…";
+  btn.style.opacity = "0.6";
+  btn.style.cursor = "not-allowed";
+
+  let resp;
+  try {
+    resp = await conProgreso("Iniciando sesión…", () => sb.rpc("login_comite", { p_usuario: usuario, p_password: password }));
+  } catch (e) {
+    resp = { data: null, error: e };
+  }
+
+  iniciandoSesion = false;
+  btn.disabled = false;
+  btn.textContent = "Entrar";
+  btn.style.opacity = "1";
+  btn.style.cursor = "pointer";
+
+  const { data, error } = resp;
+  if (error && esErrorDeRed(error)) { msg.innerHTML = errBox(error); return; }
   if (error || !data || !data[0]) { msg.innerHTML = errBox("Usuario o contraseña incorrectos."); return; }
 
   state.usuario = data[0];
   sessionStorage.setItem("comite_usuario", JSON.stringify(state.usuario));
-  renderApp();
+  renderApp(); // siempre abre en INICIO
 }
 
 function cerrarSesion() {
@@ -190,7 +416,7 @@ function renderOlvidePassword() {
     const msg = document.getElementById("olvideMsg");
     msg.innerHTML = "";
     if (!usuario) { msg.innerHTML = errBox("Escribe tu usuario."); return; }
-    const { error } = await sb.rpc("password_solicitar_recuperacion", { p_usuario: usuario });
+    const { error } = await conProgreso("Enviando solicitud de recuperación…", () => sb.rpc("password_solicitar_recuperacion", { p_usuario: usuario }));
     if (error) { msg.innerHTML = errBox(error.message); return; }
     msg.innerHTML = okBox("Solicitud enviada. Tu Director verá el link en 'Solicitudes' y te lo compartirá por WhatsApp.");
   });
@@ -200,9 +426,22 @@ function renderOlvidePassword() {
 // Establecer contraseña (activación o recuperación, vía ?token=)
 // ============================================================
 async function renderEstablecerPassword(token) {
-  app.innerHTML = `<div class="min-h-screen flex items-center justify-center p-5"><p class="text-sm" style="color:#6C7B8A">Cargando…</p></div>`;
+  app.innerHTML = `<div class="min-h-screen"></div>`;
 
-  const { data, error } = await sb.rpc("token_info_obtener", { p_token: token });
+  const { data, error } = await conProgreso("Verificando tu enlace…", () => sb.rpc("token_info_obtener", { p_token: token }));
+
+  if (error && esErrorDeRed(error)) {
+    app.innerHTML = `
+      <div class="min-h-screen flex items-center justify-center p-5">
+        <div class="w-full max-w-sm p-6 rounded-2xl bg-white border text-center" style="border-color:#E1DED5">
+          ${errBox(error)}
+          <button id="reintentarTokenBtn" class="w-full py-2.5 rounded-lg text-sm font-bold text-white" style="background:${COLOR}">Reintentar</button>
+        </div>
+      </div>`;
+    document.getElementById("reintentarTokenBtn").addEventListener("click", () => renderEstablecerPassword(token));
+    return;
+  }
+
   if (error || !data || !data[0] || !data[0].valido) {
     app.innerHTML = `
       <div class="min-h-screen flex items-center justify-center p-5">
@@ -250,9 +489,9 @@ async function renderEstablecerPassword(token) {
         </div>
         <p class="text-sm font-semibold mb-3 text-center" style="color:${COLOR}">Crea tu contraseña</p>
         <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Nueva contraseña</label>
-        <input id="estNueva" type="password" class="w-full px-3 py-2 rounded-lg text-sm mb-3 outline-none border" style="border-color:#E1DED5" />
+        ${campoPassword("estNueva", "mb-3", "new-password")}
         <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Confirmar contraseña</label>
-        <input id="estConfirmar" type="password" class="w-full px-3 py-2 rounded-lg text-sm mb-3 outline-none border" style="border-color:#E1DED5" />
+        ${campoPassword("estConfirmar", "mb-3", "new-password")}
         <ul class="mb-4 space-y-1">
           <li id="checkMayuscula"></li>
           <li id="checkMinuscula"></li>
@@ -278,11 +517,17 @@ async function renderEstablecerPassword(token) {
     const nueva = document.getElementById("estNueva").value;
     const confirmar = document.getElementById("estConfirmar").value;
     const msg = document.getElementById("estMsg");
+    const btn = document.getElementById("estGuardarBtn");
     msg.innerHTML = "";
     if (nueva !== confirmar) { msg.innerHTML = errBox("Las contraseñas no coinciden."); return; }
 
-    const { error: errGuardar } = await sb.rpc("password_establecer", { p_token: token, p_password_nueva: nueva });
-    if (errGuardar) { msg.innerHTML = errBox(errGuardar.message); return; }
+    btn.disabled = true; btn.style.opacity = "0.6";
+    const { error: errGuardar } = await conProgreso("Guardando tu contraseña…", () => sb.rpc("password_establecer", { p_token: token, p_password_nueva: nueva }));
+    if (errGuardar) {
+      btn.disabled = false; btn.style.opacity = "1";
+      msg.innerHTML = errBox(errGuardar.message);
+      return;
+    }
 
     msg.innerHTML = okBox("Contraseña creada. Ya puedes entrar.");
     setTimeout(() => { window.location.href = window.location.pathname; }, 1500);
@@ -293,18 +538,26 @@ async function renderEstablecerPassword(token) {
 // App principal
 // ============================================================
 const MENU = [
-  { id: "inicio", label: "Inicio", roles: ["Super Administrador", "Director", "Presidente", "Secretario", "Tesorero"] },
-  { id: "usuarios", label: "Usuarios", roles: ["Super Administrador", "Director"] },
-  { id: "comites", label: "Comités", roles: ["Super Administrador", "Director"] },
-  { id: "solicitudes", label: "Solicitudes de recuperación", roles: ["Super Administrador", "Director"] },
-  { id: "caja", label: "Mi caja", roles: ["Presidente", "Tesorero"] },
-  { id: "reportes", label: "Reportes", roles: ["Presidente", "Tesorero"] },
-  { id: "transparencia", label: "Transparencia", roles: ["Super Administrador", "Director"] },
-  { id: "logs", label: "Bitácora", roles: ["Super Administrador", "Director"] },
+  { id: "inicio", label: "Inicio", roles: ["Super Administrador", "Director", "Presidente", "Secretario", "Tesorero"],
+    desc: "Pantalla de bienvenida. Resume las secciones que puedes usar con tu rol y para qué sirve cada una." },
+  { id: "usuarios", label: "Usuarios", roles: ["Super Administrador", "Director"],
+    desc: "Da de alta, modifica el teléfono, inhabilita, reactiva o elimina (oculta) usuarios. Al crear uno se genera su enlace de activación para compartirlo por WhatsApp." },
+  { id: "comites", label: "Comités", roles: ["Super Administrador", "Director"],
+    desc: "Consulta los comités de la escuela y agrega nuevos comités." },
+  { id: "solicitudes", label: "Solicitudes de recuperación", roles: ["Super Administrador", "Director"],
+    desc: "Aquí aparecen los enlaces pendientes para activar cuentas nuevas o recuperar contraseñas. Cópialos y compártelos por WhatsApp." },
+  { id: "caja", label: "Mi caja", roles: ["Presidente", "Tesorero"],
+    desc: "Consulta tu saldo, registra entradas, salidas y transferencias, y revisa o descarga los comprobantes de tus movimientos." },
+  { id: "reportes", label: "Reportes", roles: ["Presidente", "Tesorero"],
+    desc: "Genera tu estado de cuenta en PDF o el total de un tipo de movimiento (entradas, salidas o transferencias) por periodo." },
+  { id: "transparencia", label: "Transparencia", roles: ["Super Administrador", "Director"],
+    desc: "Comparte con los padres de familia el enlace a la página pública de transparencia por WhatsApp, o imprime su código QR." },
+  { id: "logs", label: "Bitácora", roles: ["Super Administrador", "Director"],
+    desc: "Historial de solo lectura con las acciones importantes del sistema (quién, qué y cuándo). Puedes exportarlo a PDF como respaldo." },
 ];
 
 function renderApp(seccion) {
-  const activa = seccion || (["Presidente", "Tesorero"].includes(state.usuario.rol) ? "caja" : "inicio");
+  const activa = seccion || "inicio"; // al iniciar sesión siempre se abre INICIO
   const menuVisible = MENU.filter(m => m.roles.includes(state.usuario.rol));
 
   app.innerHTML = `
@@ -341,21 +594,40 @@ function renderApp(seccion) {
 }
 
 function renderInicio(main) {
+  const u = state.usuario;
+  const secciones = MENU.filter(m => m.id !== "inicio" && m.roles.includes(u.rol));
+  const inicio = MENU.find(m => m.id === "inicio");
+
   main.innerHTML = `
-    <h2 class="text-lg font-bold mb-2" style="color:${COLOR}">Bienvenido/a, ${state.usuario.nombre_completo}</h2>
-    <p class="text-sm" style="color:#6C7B8A">Rol: <strong>${state.usuario.rol}</strong>${state.usuario.comite_nombre ? " — " + state.usuario.comite_nombre : ""}</p>
-    <div class="mt-4 p-4 rounded-xl bg-white border max-w-md" style="border-color:#E1DED5">
-      <p class="text-sm" style="color:#1C2B3A">Este es el arranque del sistema (Fase 1: usuarios, comités y accesos). Los módulos de movimientos, transferencias, auditorías y reportes se irán agregando en las siguientes fases.</p>
+    <h2 class="text-lg font-bold mb-2" style="color:${COLOR}">Bienvenido/a, ${u.nombre_completo}</h2>
+    <p class="text-sm" style="color:#6C7B8A">Rol: <strong>${u.rol}</strong>${u.comite_nombre ? " — " + u.comite_nombre : ""}</p>
+
+    <div class="mt-4 p-4 rounded-xl bg-white border max-w-2xl" style="border-color:#E1DED5">
+      <p class="text-sm font-semibold mb-1" style="color:${COLOR}">Inicio</p>
+      <p class="text-sm" style="color:#1C2B3A">${inicio.desc}</p>
+    </div>
+
+    <p class="text-sm font-semibold mt-5 mb-2" style="color:${COLOR}">Secciones disponibles para ti</p>
+    <div class="grid gap-2 max-w-2xl">
+      ${secciones.length === 0
+        ? `<p class="text-sm" style="color:#6C7B8A">Por ahora no tienes secciones adicionales disponibles.</p>`
+        : secciones.map(m => `
+          <button class="inicioCardBtn text-left p-3 rounded-xl bg-white border" data-id="${m.id}" style="border-color:#E1DED5">
+            <p class="text-sm font-semibold" style="color:${COLOR}">${m.label}</p>
+            <p class="text-xs" style="color:#6C7B8A">${m.desc}</p>
+          </button>`).join("")}
     </div>`;
+
+  main.querySelectorAll(".inicioCardBtn").forEach(b => b.addEventListener("click", () => renderApp(b.dataset.id)));
 }
 
 // ---------- Usuarios ----------
 async function renderUsuarios(main) {
-  main.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Cargando…</p>`;
-  const [{ data: usuarios, error: errU }, { data: comitesData }] = await Promise.all([
+  main.innerHTML = "";
+  const [{ data: usuarios, error: errU }, { data: comitesData }] = await conProgreso("Cargando usuarios…", () => Promise.all([
     sb.rpc("usuarios_listar", { p_solicitante_id: state.usuario.id }),
     sb.rpc("comites_listar"),
-  ]);
+  ]));
   if (errU) { main.innerHTML = errBox(errU.message); return; }
   const comitesLista = comitesData || [];
 
@@ -475,7 +747,7 @@ async function renderUsuarios(main) {
 
     // Paso 1: ver si ese usuario ya existe en la base de datos (aunque esté
     // inactivo o eliminado)
-    const { data: existeData, error: errExiste } = await sb.rpc("usuario_verificar_existente", { p_usuario: usuario });
+    const { data: existeData, error: errExiste } = await conProgreso("Verificando si el usuario ya existe…", () => sb.rpc("usuario_verificar_existente", { p_usuario: usuario }));
     if (errExiste) { msg.innerHTML = errBox(errExiste.message); return; }
     const info = existeData && existeData[0];
 
@@ -493,7 +765,7 @@ async function renderUsuarios(main) {
         return;
       }
 
-      const { data: reactivado, error: errReact } = await sb.rpc("usuario_reactivar_con_datos", {
+      const { data: reactivado, error: errReact } = await conProgreso("Reactivando usuario…", () => sb.rpc("usuario_reactivar_con_datos", {
         p_solicitante_id: state.usuario.id,
         p_usuario_existente_id: info.id,
         p_nombre_completo: nombre,
@@ -502,11 +774,11 @@ async function renderUsuarios(main) {
         p_comite_id: comiteId,
         p_saldo_inicial_caja: saldoCaja,
         p_saldo_inicial_acreimex: saldoAcreimex,
-      });
+      }));
 
       if (errReact) {
         const quiereDiferente = confirm(
-          `${errReact.message}\n\n¿Deseas asignarle un rol y/o comité diferente? Cámbialo arriba en el formulario y presiona "Crear usuario" de nuevo.`
+          `${traducirError(errReact)}\n\n¿Deseas asignarle un rol y/o comité diferente? Cámbialo arriba en el formulario y presiona "Crear usuario" de nuevo.`
         );
         if (!quiereDiferente) {
           msg.innerHTML = errBox("No es posible activarlo, ya que no se pueden duplicar roles de comité.");
@@ -520,7 +792,7 @@ async function renderUsuarios(main) {
     }
 
     // Paso 2: no existía -> alta normal
-    const { data, error } = await sb.rpc("usuario_crear", {
+    const { data, error } = await conProgreso("Creando usuario…", () => sb.rpc("usuario_crear", {
       p_creado_por: state.usuario.id,
       p_usuario: usuario,
       p_nombre_completo: nombre,
@@ -529,7 +801,7 @@ async function renderUsuarios(main) {
       p_comite_id: comiteId,
       p_saldo_inicial_caja: saldoCaja,
       p_saldo_inicial_acreimex: saldoAcreimex,
-    });
+    }));
     if (error) { msg.innerHTML = errBox(error.message); return; }
 
     mostrarLinkGenerado(data[0].token_activacion);
@@ -538,16 +810,16 @@ async function renderUsuarios(main) {
 
   main.querySelectorAll(".uEstadoBtn").forEach(b => b.addEventListener("click", async () => {
     const activo = b.dataset.activo === "true";
-    const { error } = await sb.rpc("usuario_cambiar_estado", { p_solicitante_id: state.usuario.id, p_usuario_id: b.dataset.id, p_activo: !activo });
-    if (error) { alert(error.message); return; }
+    const { error } = await conProgreso(activo ? "Inhabilitando usuario…" : "Reactivando usuario…", () => sb.rpc("usuario_cambiar_estado", { p_solicitante_id: state.usuario.id, p_usuario_id: b.dataset.id, p_activo: !activo }));
+    if (error) { alert(traducirError(error)); return; }
     renderUsuarios(main);
   }));
 
   main.querySelectorAll(".uEliminarBtn").forEach(b => b.addEventListener("click", async () => {
     const confirmar = confirm(`¿Eliminar a ${b.dataset.nombre} de la lista? No se borra de la base de datos, solo se oculta (sigue disponible para reportes).`);
     if (!confirmar) return;
-    const { error } = await sb.rpc("usuario_eliminar", { p_solicitante_id: state.usuario.id, p_usuario_id: b.dataset.id });
-    if (error) { alert(error.message); return; }
+    const { error } = await conProgreso("Eliminando usuario…", () => sb.rpc("usuario_eliminar", { p_solicitante_id: state.usuario.id, p_usuario_id: b.dataset.id }));
+    if (error) { alert(traducirError(error)); return; }
     renderUsuarios(main);
   }));
 
@@ -569,11 +841,11 @@ async function renderUsuarios(main) {
     document.getElementById(`${prefijo}GuardarBtn`).addEventListener("click", async () => {
       const msg = document.getElementById(`${prefijo}Msg`);
       msg.innerHTML = "";
-      const { error } = await sb.rpc("usuario_modificar", {
+      const { error } = await conProgreso("Guardando cambios del usuario…", () => sb.rpc("usuario_modificar", {
         p_solicitante_id: state.usuario.id,
         p_usuario_id: u.id,
         p_telefono: document.getElementById(`${prefijo}Telefono`).value.trim(),
-      });
+      }));
       if (error) { msg.innerHTML = errBox(error.message); return; }
       renderUsuarios(main);
     });
@@ -584,8 +856,8 @@ async function renderUsuarios(main) {
 const MAX_REGISTROS_BITACORA = 500; // al alcanzar este número, se sugiere respaldo en PDF
 
 async function renderLogs(main) {
-  main.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Cargando…</p>`;
-  const { data, error } = await sb.rpc("bitacora_listar", { p_solicitante_id: state.usuario.id });
+  main.innerHTML = "";
+  const { data, error } = await conProgreso("Cargando bitácora…", () => sb.rpc("bitacora_listar", { p_solicitante_id: state.usuario.id }));
   if (error) { main.innerHTML = errBox(error.message); return; }
 
   const registros = data || [];
@@ -612,7 +884,13 @@ async function renderLogs(main) {
       </div>
     </div>`;
 
-  document.getElementById("exportarPdfBtn").addEventListener("click", () => exportarBitacoraPDF(registros));
+  document.getElementById("exportarPdfBtn").addEventListener("click", async () => {
+    try {
+      await conProgreso("Generando PDF de la bitácora…", async () => exportarBitacoraPDF(registros));
+    } catch (e) {
+      avisoGlobal("No se pudo generar el PDF: " + traducirError(e), "error");
+    }
+  });
 }
 
 function exportarBitacoraPDF(registros) {
@@ -653,8 +931,8 @@ function exportarBitacoraPDF(registros) {
 
 // ---------- Comités ----------
 async function renderComites(main) {
-  main.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Cargando…</p>`;
-  const { data, error } = await sb.rpc("comites_listar");
+  main.innerHTML = "";
+  const { data, error } = await conProgreso("Cargando comités…", () => sb.rpc("comites_listar"));
   if (error) { main.innerHTML = errBox(error.message); return; }
 
   main.innerHTML = `
@@ -683,7 +961,7 @@ async function renderComites(main) {
     const msg = document.getElementById("ncMsg");
     msg.innerHTML = "";
     if (!nombre) { msg.innerHTML = errBox("Escribe el nombre del comité."); return; }
-    const { error } = await sb.rpc("comite_crear", { p_creado_por: state.usuario.id, p_nombre: nombre });
+    const { error } = await conProgreso("Guardando comité…", () => sb.rpc("comite_crear", { p_creado_por: state.usuario.id, p_nombre: nombre }));
     if (error) { msg.innerHTML = errBox(error.message); return; }
     renderComites(main);
   });
@@ -691,8 +969,8 @@ async function renderComites(main) {
 
 // ---------- Solicitudes de recuperación/activación ----------
 async function renderSolicitudes(main) {
-  main.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Cargando…</p>`;
-  const { data, error } = await sb.rpc("tokens_pendientes_listar", { p_solicitante_id: state.usuario.id });
+  main.innerHTML = "";
+  const { data, error } = await conProgreso("Cargando solicitudes…", () => sb.rpc("tokens_pendientes_listar", { p_solicitante_id: state.usuario.id }));
   if (error) { main.innerHTML = errBox(error.message); return; }
 
   main.innerHTML = `
@@ -722,14 +1000,14 @@ async function renderSolicitudes(main) {
 // Mi caja (Presidente/Tesorero): entradas y salidas
 // ============================================================
 async function renderCaja(main) {
-  main.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Cargando…</p>`;
+  main.innerHTML = "";
 
-  const [{ data: cuentaData, error: errCuenta }, { data: movsData, error: errMovs }] = await Promise.all([
+  const [{ data: cuentaData, error: errCuenta }, { data: movsData, error: errMovs }] = await conProgreso("Cargando tu caja…", () => Promise.all([
     sb.rpc("mi_cuenta_obtener", { p_usuario_id: state.usuario.id }),
     sb.rpc("mis_movimientos_filtrar", { p_usuario_id: state.usuario.id, p_desde: null, p_hasta: null }),
-  ]);
+  ]));
   if (errCuenta) { main.innerHTML = errBox(errCuenta.message); return; }
-  if (errMovs) { main.innerHTML = errBox(errMovs.message + " (¿ya ejecutaste el SQL de mis_movimientos_filtrar?)"); return; }
+  if (errMovs) { main.innerHTML = errBox(traducirError(errMovs) + " (¿ya ejecutaste el SQL de mis_movimientos_filtrar?)"); return; }
 
   const cuenta = cuentaData[0];
   let movimientos = movsData || [];
@@ -808,8 +1086,8 @@ async function renderCaja(main) {
 
     main.querySelectorAll(".verComprobanteBtn").forEach(b => b.addEventListener("click", async () => {
       const m = listaMostrada[Number(b.dataset.idx)];
-      const { data, error } = await sb.storage.from("comprobantes").createSignedUrl(m.comprobante_path, 300);
-      if (error) { alert(error.message); return; }
+      const { data, error } = await conProgreso("Abriendo comprobante…", () => sb.storage.from("comprobantes").createSignedUrl(m.comprobante_path, 300));
+      if (error) { alert(traducirError(error)); return; }
       window.open(data.signedUrl, "_blank");
     }));
 
@@ -817,8 +1095,8 @@ async function renderCaja(main) {
       const m = listaMostrada[Number(b.dataset.idx)];
       const ext = (m.comprobante_path.split(".").pop() || "jpg").toLowerCase();
       const nombre = `comprobante_${m.tipo}_${new Date(m.creado_en).toISOString().slice(0, 10)}.${ext}`.replace(/\s+/g, "_");
-      const { data, error } = await sb.storage.from("comprobantes").createSignedUrl(m.comprobante_path, 300, { download: nombre });
-      if (error) { alert(error.message); return; }
+      const { data, error } = await conProgreso("Preparando la descarga del comprobante…", () => sb.storage.from("comprobantes").createSignedUrl(m.comprobante_path, 300, { download: nombre }));
+      if (error) { alert(traducirError(error)); return; }
       const a = document.createElement("a");
       a.href = data.signedUrl; a.download = nombre; document.body.appendChild(a); a.click(); a.remove();
     }));
@@ -828,12 +1106,11 @@ async function renderCaja(main) {
       const r = periodoLeer("fm");
       if (r.error) { document.getElementById("filtroMsg").innerHTML = errBox(r.error); return; }
       estFiltro = { modo: r.modo, mes: r.mes, anio: r.anio, desde: r.desde, hasta: r.hasta };
-      document.getElementById("filtroMsg").innerHTML = `<p class="text-xs" style="color:#6C7B8A">Buscando…</p>`;
-      const { data, error } = await sb.rpc("mis_movimientos_filtrar", {
+      const { data, error } = await conProgreso("Buscando movimientos…", () => sb.rpc("mis_movimientos_filtrar", {
         p_usuario_id: state.usuario.id,
         p_desde: r.modo === "completo" ? null : r.fechaInicio.toISOString(),
         p_hasta: r.modo === "completo" ? null : r.fechaFin.toISOString(),
-      });
+      }));
       if (error) { document.getElementById("filtroMsg").innerHTML = errBox(error.message); return; }
       movimientos = data || [];
       msgFiltro = "";
@@ -887,27 +1164,29 @@ async function renderCaja(main) {
       if (!concepto) { msg.innerHTML = errBox("Escribe el concepto."); return; }
       if (esSalida && !archivo) { msg.innerHTML = errBox("Las salidas requieren subir un comprobante."); return; }
 
-      let comprobantePath = null;
-      if (archivo) {
-        msg.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Comprimiendo y subiendo comprobante…</p>`;
-        try {
-          comprobantePath = await subirComprobante(archivo);
-        } catch (errSubida) {
-          msg.innerHTML = errBox("No se pudo subir el comprobante: " + errSubida.message);
-          return;
+      const resultado = await conProgreso(archivo ? "Comprimiendo y subiendo comprobante…" : `Guardando ${tipo.toLowerCase()}…`, async () => {
+        let comprobantePath = null;
+        if (archivo) {
+          try {
+            comprobantePath = await subirComprobante(archivo);
+          } catch (errSubida) {
+            return { errorSubida: errSubida };
+          }
+          actualizarProgreso(`Guardando ${tipo.toLowerCase()}…`);
         }
-      }
-
-      const { error } = await sb.rpc("movimiento_registrar", {
-        p_usuario_id: state.usuario.id,
-        p_tipo: tipo,
-        p_cuenta: cuentaSel,
-        p_monto: monto,
-        p_concepto: concepto,
-        p_comentarios: comentarios || null,
-        p_comprobante_path: comprobantePath,
+        return await sb.rpc("movimiento_registrar", {
+          p_usuario_id: state.usuario.id,
+          p_tipo: tipo,
+          p_cuenta: cuentaSel,
+          p_monto: monto,
+          p_concepto: concepto,
+          p_comentarios: comentarios || null,
+          p_comprobante_path: comprobantePath,
+        });
       });
-      if (error) { msg.innerHTML = errBox(error.message); return; }
+
+      if (resultado.errorSubida) { msg.innerHTML = errBox("No se pudo subir el comprobante: " + traducirError(resultado.errorSubida)); return; }
+      if (resultado.error) { msg.innerHTML = errBox(resultado.error.message); return; }
 
       renderCaja(main);
     });
@@ -926,9 +1205,9 @@ async function renderCaja(main) {
         <p class="text-xs mb-3" style="color:#6C7B8A">${mov.tipo} de $${Number(mov.monto).toFixed(2)} — ${mov.concepto}</p>
         <p class="text-xs mb-3" style="color:#6C7B8A">Requiere la autorización del ${rolContraparte} de tu comité y del Director.</p>
         <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Contraseña del ${rolContraparte} de tu comité</label>
-        <input id="elimContraparte" type="password" class="w-full px-3 py-2 rounded-lg text-sm mb-3 outline-none border" style="border-color:#E1DED5" />
+        ${campoPassword("elimContraparte", "mb-3")}
         <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Contraseña del Director</label>
-        <input id="elimDirector" type="password" class="w-full px-3 py-2 rounded-lg text-sm mb-3 outline-none border" style="border-color:#E1DED5" />
+        ${campoPassword("elimDirector", "mb-3")}
         <div id="elimMsg"></div>
         <div class="flex gap-2">
           <button id="elimCancelar" class="flex-1 py-2 rounded-lg text-sm font-semibold" style="background:#F4F1EB; color:${COLOR}">Cancelar</button>
@@ -941,12 +1220,12 @@ async function renderCaja(main) {
     document.getElementById("elimConfirmar").addEventListener("click", async () => {
       const msg = document.getElementById("elimMsg");
       msg.innerHTML = "";
-      const { error } = await sb.rpc("movimiento_eliminar", {
+      const { error } = await conProgreso("Eliminando movimiento…", () => sb.rpc("movimiento_eliminar", {
         p_solicitante_id: state.usuario.id,
         p_movimiento_id: mov.id,
         p_password_contraparte: document.getElementById("elimContraparte").value,
         p_password_director: document.getElementById("elimDirector").value,
-      });
+      }));
       if (error) { msg.innerHTML = errBox(error.message); return; }
       modal.remove();
       renderCaja(main);
@@ -956,9 +1235,9 @@ async function renderCaja(main) {
   // ---------- Transferencia a otra persona ----------
   async function mostrarFormTransferencia() {
     const wrap = document.getElementById("formMovWrap");
-    wrap.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Cargando destinatarios…</p>`;
+    wrap.innerHTML = "";
 
-    const { data: destinatarios, error: errDest } = await sb.rpc("usuarios_transferibles_listar");
+    const { data: destinatarios, error: errDest } = await conProgreso("Cargando destinatarios…", () => sb.rpc("usuarios_transferibles_listar"));
     if (errDest) { wrap.innerHTML = errBox(errDest.message); return; }
     const lista = (destinatarios || []).filter(d => d.id !== state.usuario.id);
 
@@ -996,12 +1275,12 @@ async function renderCaja(main) {
 
       wrapAut.innerHTML = `
         <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Contraseña de quien recibe</label>
-        <input id="trPassReceptor" type="password" class="w-full px-3 py-2 rounded-lg text-sm mb-2 outline-none border" style="border-color:#E1DED5" />
+        ${campoPassword("trPassReceptor", "mb-2")}
         ${!mismoComite ? `
         <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Contraseña del ${rolContraparte} de tu comité</label>
-        <input id="trPassContraparte" type="password" class="w-full px-3 py-2 rounded-lg text-sm mb-2 outline-none border" style="border-color:#E1DED5" />` : ""}
+        ${campoPassword("trPassContraparte", "mb-2")}` : ""}
         <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Contraseña del Director</label>
-        <input id="trPassDirector" type="password" class="w-full px-3 py-2 rounded-lg text-sm mb-2 outline-none border" style="border-color:#E1DED5" />`;
+        ${campoPassword("trPassDirector", "mb-2")}`;
     }
 
     document.getElementById("trDestino").addEventListener("change", pintarAutorizaciones);
@@ -1014,7 +1293,7 @@ async function renderCaja(main) {
       if (!destinoId) { msg.innerHTML = errBox("Selecciona a quién le envías."); return; }
       if (!monto || monto <= 0) { msg.innerHTML = errBox("Escribe un monto válido."); return; }
 
-      const { error } = await sb.rpc("transferencia_registrar", {
+      const { error } = await conProgreso("Registrando transferencia…", () => sb.rpc("transferencia_registrar", {
         p_usuario_origen_id: state.usuario.id,
         p_usuario_destino_id: destinoId,
         p_monto: monto,
@@ -1022,7 +1301,7 @@ async function renderCaja(main) {
         p_password_receptor: document.getElementById("trPassReceptor")?.value || null,
         p_password_contraparte_origen: document.getElementById("trPassContraparte")?.value || null,
         p_password_director: document.getElementById("trPassDirector")?.value || null,
-      });
+      }));
       if (error) { msg.innerHTML = errBox(error.message); return; }
       renderCaja(main);
     });
@@ -1064,25 +1343,27 @@ async function renderCaja(main) {
       if (!monto || monto <= 0) { msg.innerHTML = errBox("Escribe un monto válido."); return; }
       if (!archivo) { msg.innerHTML = errBox("Sube el comprobante del depósito/retiro."); return; }
 
-      let comprobantePath;
-      try {
-        msg.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Comprimiendo y subiendo comprobante…</p>`;
-        comprobantePath = await subirComprobante(archivo);
-      } catch (errSubida) {
-        msg.innerHTML = errBox("No se pudo subir el comprobante: " + errSubida.message);
-        return;
-      }
-
-      const { error } = await sb.rpc("transferencia_registrar", {
-        p_usuario_origen_id: state.usuario.id,
-        p_usuario_destino_id: state.usuario.id,
-        p_monto: monto,
-        p_concepto: document.getElementById("atConcepto").value.trim() || null,
-        p_comprobante_path: comprobantePath,
-        p_cuenta_origen: origen,
-        p_cuenta_destino: destino,
+      const resultado = await conProgreso("Comprimiendo y subiendo comprobante…", async () => {
+        let comprobantePath;
+        try {
+          comprobantePath = await subirComprobante(archivo);
+        } catch (errSubida) {
+          return { errorSubida: errSubida };
+        }
+        actualizarProgreso("Registrando transferencia entre tus cuentas…");
+        return await sb.rpc("transferencia_registrar", {
+          p_usuario_origen_id: state.usuario.id,
+          p_usuario_destino_id: state.usuario.id,
+          p_monto: monto,
+          p_concepto: document.getElementById("atConcepto").value.trim() || null,
+          p_comprobante_path: comprobantePath,
+          p_cuenta_origen: origen,
+          p_cuenta_destino: destino,
+        });
       });
-      if (error) { msg.innerHTML = errBox(error.message); return; }
+
+      if (resultado.errorSubida) { msg.innerHTML = errBox("No se pudo subir el comprobante: " + traducirError(resultado.errorSubida)); return; }
+      if (resultado.error) { msg.innerHTML = errBox(resultado.error.message); return; }
       renderCaja(main);
     });
   }
@@ -1217,17 +1498,19 @@ function renderTransparencia(main) {
 
   document.getElementById("btnQrPdf").addEventListener("click", async () => {
     try {
-      const dataUrl = await QRCode.toDataURL(url, { width: 1400, margin: 2, errorCorrectionLevel: "M" });
-      const doc = new window.jspdf.jsPDF({ unit: "mm", format: "letter", orientation: "portrait" });
-      const W = doc.internal.pageSize.getWidth();
-      const H = doc.internal.pageSize.getHeight();
-      doc.setFont(undefined, "bold");
-      doc.setFontSize(22);
-      const lineas = doc.splitTextToSize("PÁGINA DE TRANSPARENCIA DE LOS DIVERSOS COMITÉS DE NUESTRA INSTITUCIÓN", W - 40);
-      doc.text(lineas, W / 2, 40, { align: "center" });
-      const lado = 150;
-      doc.addImage(dataUrl, "PNG", (W - lado) / 2, (H - lado) / 2 + 10, lado, lado);
-      doc.save("qr_transparencia_comites.pdf");
+      await conProgreso("Generando PDF del código QR…", async () => {
+        const dataUrl = await QRCode.toDataURL(url, { width: 1400, margin: 2, errorCorrectionLevel: "M" });
+        const doc = new window.jspdf.jsPDF({ unit: "mm", format: "letter", orientation: "portrait" });
+        const W = doc.internal.pageSize.getWidth();
+        const H = doc.internal.pageSize.getHeight();
+        doc.setFont(undefined, "bold");
+        doc.setFontSize(22);
+        const lineas = doc.splitTextToSize("PÁGINA DE TRANSPARENCIA DE LOS DIVERSOS COMITÉS DE NUESTRA INSTITUCIÓN", W - 40);
+        doc.text(lineas, W / 2, 40, { align: "center" });
+        const lado = 150;
+        doc.addImage(dataUrl, "PNG", (W - lado) / 2, (H - lado) / 2 + 10, lado, lado);
+        doc.save("qr_transparencia_comites.pdf");
+      });
     } catch (e) {
       msg.innerHTML = errBox(e.message);
     }
@@ -1238,8 +1521,8 @@ function renderTransparencia(main) {
 // Reportes (Presidente/Tesorero): Estado de cuenta y Reporte por Movimiento
 // ============================================================
 async function renderReportes(main) {
-  main.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Cargando…</p>`;
-  const { data: cuentaData, error: errCuenta } = await sb.rpc("mi_cuenta_obtener", { p_usuario_id: state.usuario.id });
+  main.innerHTML = "";
+  const { data: cuentaData, error: errCuenta } = await conProgreso("Cargando tus datos…", () => sb.rpc("mi_cuenta_obtener", { p_usuario_id: state.usuario.id }));
   if (errCuenta) { main.innerHTML = errBox(errCuenta.message); return; }
   const cuenta = cuentaData[0];
   const tieneAcreimex = cuenta.saldo_acreimex !== null;
@@ -1296,25 +1579,33 @@ async function renderReportes(main) {
     if (rango.error) { msg.innerHTML = errBox(rango.error); return; }
     estPeriodo = { modo: rango.modo, mes: rango.mes, anio: rango.anio, desde: rango.desde, hasta: rango.hasta };
 
-    msg.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Generando…</p>`;
-    const { data: historial, error: errHist } = await sb.rpc("cuenta_historial_completo", {
-      p_usuario_id: state.usuario.id, p_cuenta: cuentaRep,
+    const consulta = await conProgreso("Consultando movimientos…", async () => {
+      const h = await sb.rpc("cuenta_historial_completo", { p_usuario_id: state.usuario.id, p_cuenta: cuentaRep });
+      if (h.error || opcion !== "estado") return { h };
+      actualizarProgreso("Obteniendo datos del Director…");
+      const d = await sb.rpc("director_actual_obtener");
+      return { h, d };
     });
+    const { data: historial, error: errHist } = consulta.h;
     if (errHist) { msg.innerHTML = errBox(errHist.message); return; }
-    msg.innerHTML = "";
     const hist = historial || [];
     const cargo = `${cuenta.rol} de ${cuenta.comite_nombre || "—"}`.toUpperCase();
 
     if (opcion === "estado") {
-      const { data: directorData } = await sb.rpc("director_actual_obtener");
+      const directorData = consulta.d && consulta.d.data;
       const nombreDirector = (directorData && directorData[0] && directorData[0].nombre_completo) || "—";
       const saldoActual = cuentaRep === "Acreimex" ? cuenta.saldo_acreimex : cuenta.saldo_caja_chica;
       const est = construirEstadoCuenta(hist, saldoActual, rango);
-      generarReporteEstadoCuentaPDF({
-        titular: state.usuario.nombre_completo, cargo, cuenta: cuentaRep,
-        fechaInicioTexto: est.fechaInicioTexto, fechaFinTexto: est.fechaFinTexto,
-        balanceInicial: est.balanceInicial, filas: est.filas, directorNombre: nombreDirector,
-      });
+      try {
+        await conProgreso("Generando estado de cuenta en PDF…", async () => generarReporteEstadoCuentaPDF({
+          titular: state.usuario.nombre_completo, cargo, cuenta: cuentaRep,
+          fechaInicioTexto: est.fechaInicioTexto, fechaFinTexto: est.fechaFinTexto,
+          balanceInicial: est.balanceInicial, filas: est.filas, directorNombre: nombreDirector,
+        }));
+      } catch (e) {
+        msg.innerHTML = errBox("No se pudo generar el PDF: " + traducirError(e));
+        return;
+      }
       res.innerHTML = okBox("Estado de cuenta generado.");
       return;
     }
@@ -1349,34 +1640,40 @@ async function renderReportes(main) {
         <button id="btnPdfMov" class="mt-3 px-3 py-1.5 rounded-lg text-xs font-semibold" style="background:#F4F1EB; color:${COLOR}">📄 Descargar PDF</button>
       </div>`;
 
-    document.getElementById("btnPdfMov").addEventListener("click", () => {
-      const doc = new window.jspdf.jsPDF({ unit: "mm", format: "letter", orientation: "portrait" });
-      doc.setFontSize(13); doc.setFont(undefined, "bold");
-      doc.text(`REPORTE POR MOVIMIENTO: ${nombreTipo.toUpperCase()}`, 12, 14);
-      doc.setFontSize(9); doc.setFont(undefined, "normal");
-      doc.text(`Titular: ${String(state.usuario.nombre_completo).toUpperCase()}`, 12, 21);
-      doc.text(`Cargo: ${cargo}`, 12, 26);
-      doc.text(`Cuenta: ${cuentaRep}`, 12, 31);
-      doc.text(`Periodo: ${periodoTxt}`, 12, 36);
-      const resumen = tipo === "Transferencia"
-        ? `Enviadas: ${dinero(enviadas)}   Recibidas: ${dinero(recibidas)}`
-        : `Total ${nombreTipo.toLowerCase()}: ${dinero(total)}`;
-      doc.setFont(undefined, "bold"); doc.text(resumen, 12, 43); doc.setFont(undefined, "normal");
-      doc.autoTable({
-        startY: 48,
-        head: [["No.", "Fecha y hora", "Concepto", "Tipo", "Monto"]],
-        body: filas.map((f, i) => [String(i + 1),
-          new Date(f.creado_en).toLocaleString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }),
-          f.concepto || "", f.tipo, dinero(f.monto)]),
-        styles: { fontSize: 8 }, headStyles: { fillColor: [28, 43, 58] },
-        columnStyles: { 4: { halign: "right" } },
-      });
-      const tp = doc.internal.getNumberOfPages();
-      for (let p = 1; p <= tp; p++) {
-        doc.setPage(p); doc.setFontSize(8);
-        doc.text(`${p}/${tp}`, doc.internal.pageSize.getWidth() - 20, doc.internal.pageSize.getHeight() - 10);
+    document.getElementById("btnPdfMov").addEventListener("click", async () => {
+      try {
+        await conProgreso("Generando PDF del reporte…", async () => {
+          const doc = new window.jspdf.jsPDF({ unit: "mm", format: "letter", orientation: "portrait" });
+          doc.setFontSize(13); doc.setFont(undefined, "bold");
+          doc.text(`REPORTE POR MOVIMIENTO: ${nombreTipo.toUpperCase()}`, 12, 14);
+          doc.setFontSize(9); doc.setFont(undefined, "normal");
+          doc.text(`Titular: ${String(state.usuario.nombre_completo).toUpperCase()}`, 12, 21);
+          doc.text(`Cargo: ${cargo}`, 12, 26);
+          doc.text(`Cuenta: ${cuentaRep}`, 12, 31);
+          doc.text(`Periodo: ${periodoTxt}`, 12, 36);
+          const resumen = tipo === "Transferencia"
+            ? `Enviadas: ${dinero(enviadas)}   Recibidas: ${dinero(recibidas)}`
+            : `Total ${nombreTipo.toLowerCase()}: ${dinero(total)}`;
+          doc.setFont(undefined, "bold"); doc.text(resumen, 12, 43); doc.setFont(undefined, "normal");
+          doc.autoTable({
+            startY: 48,
+            head: [["No.", "Fecha y hora", "Concepto", "Tipo", "Monto"]],
+            body: filas.map((f, i) => [String(i + 1),
+              new Date(f.creado_en).toLocaleString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }),
+              f.concepto || "", f.tipo, dinero(f.monto)]),
+            styles: { fontSize: 8 }, headStyles: { fillColor: [28, 43, 58] },
+            columnStyles: { 4: { halign: "right" } },
+          });
+          const tp = doc.internal.getNumberOfPages();
+          for (let p = 1; p <= tp; p++) {
+            doc.setPage(p); doc.setFontSize(8);
+            doc.text(`${p}/${tp}`, doc.internal.pageSize.getWidth() - 20, doc.internal.pageSize.getHeight() - 10);
+          }
+          doc.save(`reporte_${tipo.toLowerCase()}_${new Date().toISOString().slice(0, 10)}.pdf`);
+        });
+      } catch (e) {
+        avisoGlobal("No se pudo generar el PDF: " + traducirError(e), "error");
       }
-      doc.save(`reporte_${tipo.toLowerCase()}_${new Date().toISOString().slice(0, 10)}.pdf`);
     });
   }
 
