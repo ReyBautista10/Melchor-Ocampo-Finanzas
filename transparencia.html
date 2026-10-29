@@ -41,6 +41,7 @@ function cicloEscolarActual(f) {
   const a = f.getFullYear();
   return f.getMonth() >= 7 ? `${a}-${a + 1}` : `${a - 1}-${a}`;
 }
+let cicloPdf = null; // ciclo que se imprime en los PDF
 const ESCUELA = {
   nombre: 'Escuela Primaria "Melchor Ocampo"',
   clave: "20DPR1505H",
@@ -66,7 +67,7 @@ function pdfEncabezado(doc, x0) {
   doc.text(ESCUELA.nombre.toUpperCase(), xt, 16);
   doc.setFont(undefined, "normal"); doc.setFontSize(9);
   doc.text(`Clave del centro de trabajo: ${ESCUELA.clave}`, xt, 22);
-  doc.text(`Ciclo escolar ${ESCUELA.ciclo}`, xt, 27);
+  doc.text(`Ciclo escolar ${cicloPdf || ESCUELA.ciclo}`, xt, 27);
   doc.text(ESCUELA.localidad, xt, 32);
   doc.setDrawColor(28, 61, 90); doc.setLineWidth(0.5);
   doc.line(x0, 36, W - x0, 36);
@@ -78,7 +79,7 @@ function pdfEncabezado(doc, x0) {
 function pdfEncabezadoCorrido(doc, x0) {
   const W = doc.internal.pageSize.getWidth();
   doc.setFont(undefined, "normal"); doc.setFontSize(8);
-  doc.text(`${ESCUELA.nombre.toUpperCase()} · Clave ${ESCUELA.clave} · Ciclo escolar ${ESCUELA.ciclo}`, x0, 12);
+  doc.text(`${ESCUELA.nombre.toUpperCase()} · Clave ${ESCUELA.clave} · Ciclo escolar ${cicloPdf || ESCUELA.ciclo}`, x0, 12);
   doc.setDrawColor(28, 61, 90); doc.line(x0, 14, W - x0, 14); doc.setDrawColor(0);
   return 20;
 }
@@ -169,16 +170,15 @@ function periodoLeer(id) {
   return { ...base, fechaInicio: fi, fechaFin: ff, texto: "Personalizado" };
 }
 
-// hist = movimientos de la cuenta en orden ascendente (es_entrada, monto, creado_en)
-function construirEstadoCuenta(hist, saldoActual, rango) {
-  const neto = hist.filter(h => new Date(h.creado_en) >= rango.fechaInicio)
-    .reduce((s, h) => s + (h.es_entrada ? Number(h.monto) : -Number(h.monto)), 0);
-  const balanceInicial = Number(saldoActual) - neto;
-  let corrido = balanceInicial;
+// hist = movimientos de la cuenta dentro del ciclo (orden ascendente); saldoInicial = saldo con que empezó el ciclo
+function construirEstadoCuenta(hist, saldoInicial, rango, ciclo) {
+  let corrido = Number(saldoInicial);
+  const balanceInicial = corrido;
   const filas = hist.filter(h => { const f = new Date(h.creado_en); return f >= rango.fechaInicio && f <= rango.fechaFin; })
     .map(f => { corrido += f.es_entrada ? Number(f.monto) : -Number(f.monto); return { ...f, balance: corrido }; });
-  const ini = rango.modo === "completo" ? (hist.length ? new Date(hist[0].creado_en) : new Date()) : rango.fechaInicio;
-  const fin = rango.modo === "completo" ? new Date() : rango.fechaFin;
+  const fechaDe = (t) => new Date(t + "T12:00:00");
+  const ini = ciclo && ciclo.fecha_inicio ? fechaDe(ciclo.fecha_inicio) : (hist.length ? new Date(hist[0].creado_en) : new Date());
+  const fin = ciclo && ciclo.estado === "Cerrado" && ciclo.fecha_fin ? fechaDe(ciclo.fecha_fin) : new Date();
   return {
     balanceInicial, filas,
     fechaInicioTexto: ini.toLocaleDateString("es-MX"),
@@ -272,19 +272,37 @@ function generarReporteEstadoCuentaPDF({ titular, cargo, rol, comite, cuenta, fe
 }
 
 
+function cicloSeleccionado() { return (state.ciclos || []).find(c => c.id === state.cicloId) || null; }
+
 async function pantallaLista() {
   state.sel = null;
   app.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Cargando…</p>`;
-  const { data, error } = await sb.rpc("publico_cargos_listar");
+  if (!state.ciclos) {
+    const rc = await sb.rpc("ciclos_listar");
+    state.ciclos = (!rc.error && rc.data) ? rc.data : [];
+    const abierto = state.ciclos.find(c => c.estado === "Abierto") || state.ciclos[0];
+    state.cicloId = abierto ? abierto.id : null;
+  }
+  const ciclo = cicloSeleccionado();
+  document.getElementById("cicloHeader").textContent = ciclo ? ciclo.nombre : ESCUELA.ciclo;
+  const { data, error } = await sb.rpc("publico_cargos_listar", state.cicloId ? { p_ciclo_id: state.cicloId } : {});
   if (error) { app.innerHTML = errBox(error.message); return; }
   state.cargos = data || [];
   app.innerHTML = `
+    ${state.ciclos.length > 1 ? `
+    <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Ciclo escolar</label>
+    <select id="cicloSel" class="w-full px-3 py-2 rounded-lg text-sm mb-1 outline-none border bg-white" style="border-color:#E1DED5; color:${COLOR}">
+      ${state.ciclos.map(c => `<option value="${c.id}" ${c.id === state.cicloId ? "selected" : ""}>${c.nombre}${c.estado === "Abierto" ? " (actual)" : ""}</option>`).join("")}
+    </select>
+    ${ciclo && ciclo.estado === "Cerrado" ? `<p class="text-xs mb-3" style="color:#B5453A">Este ciclo escolar ya terminó. Aquí ves cómo quedó su información.</p>` : `<div class="mb-3"></div>`}` : ""}
     <p class="text-sm mb-1 font-semibold" style="color:${COLOR}">Consulta el estado de cuenta</p>
     <p class="text-xs mb-4" style="color:#6C7B8A">Selecciona el cargo del que deseas conocer el manejo de los recursos.</p>
     <div class="space-y-2">
       ${state.cargos.length === 0 ? `<p class="text-sm" style="color:#6C7B8A">Aún no hay cargos registrados.</p>` : state.cargos.map((c, i) => `
         <button class="cargoBtn w-full text-left px-4 py-3 rounded-xl bg-white border text-sm font-semibold" data-i="${i}" style="border-color:#E1DED5; color:${COLOR}">${etiquetaCargo(c)}</button>`).join("")}
     </div>`;
+  const sel = document.getElementById("cicloSel");
+  if (sel) sel.addEventListener("change", () => { state.cicloId = sel.value; pantallaLista(); });
   app.querySelectorAll(".cargoBtn").forEach(b => b.addEventListener("click", () => pantallaConsulta(state.cargos[Number(b.dataset.i)])));
 }
 
@@ -314,20 +332,22 @@ async function consultar(cuenta) {
   const msg = document.getElementById("pubMsg");
   const res = document.getElementById("pubResultado");
   msg.innerHTML = ""; res.innerHTML = "";
-  const finHoy = new Date(); finHoy.setHours(23, 59, 59, 999);
-  const rango = { modo: "completo", fechaInicio: new Date(2000, 0, 1), fechaFin: finHoy };
+  const ciclo = cicloSeleccionado();
+  const pc = state.cicloId ? { p_ciclo_id: state.cicloId } : {};
+  const rango = { modo: "completo", fechaInicio: new Date(2000, 0, 1), fechaFin: new Date(2100, 0, 1) };
   msg.innerHTML = `<p class="text-sm" style="color:#6C7B8A">Consultando…</p>`;
 
-  const [{ data: info, error: e1 }, { data: hist, error: e2 }] = await Promise.all([
-    sb.rpc("publico_cuenta_info", { p_usuario_id: c.usuario_id, p_cuenta: cuenta }),
-    sb.rpc("publico_estado_cuenta", { p_usuario_id: c.usuario_id, p_cuenta: cuenta }),
+  const [{ data: info, error: e1 }, { data: hist, error: e2 }, { data: sal, error: e3 }] = await Promise.all([
+    sb.rpc("publico_cuenta_info", { p_usuario_id: c.usuario_id, p_cuenta: cuenta, ...pc }),
+    sb.rpc("publico_estado_cuenta", { p_usuario_id: c.usuario_id, p_cuenta: cuenta, ...pc }),
+    sb.rpc("publico_saldos_ciclo", { p_usuario_id: c.usuario_id, p_cuenta: cuenta, ...pc }),
   ]);
-  if (e1 || e2) { msg.innerHTML = errBox((e1 || e2).message); return; }
+  if (e1 || e2 || e3) { msg.innerHTML = errBox((e1 || e2 || e3).message); return; }
   msg.innerHTML = "";
   const datos = info && info[0];
   if (!datos) { msg.innerHTML = errBox("No se encontró la cuenta."); return; }
 
-  const est = construirEstadoCuenta(hist || [], datos.saldo_actual, rango);
+  const est = construirEstadoCuenta(hist || [], sal && sal[0] ? sal[0].saldo_inicial : 0, rango, ciclo);
   const totEnt = est.filas.filter(f => f.es_entrada).reduce((s, f) => s + Number(f.monto), 0);
   const totSal = est.filas.filter(f => !f.es_entrada).reduce((s, f) => s + Number(f.monto), 0);
   const balanceFinal = est.balanceInicial + totEnt - totSal;
@@ -335,6 +355,7 @@ async function consultar(cuenta) {
   res.innerHTML = `
     <div class="p-4 rounded-xl bg-white border" style="border-color:#E1DED5">
       <p class="text-xs" style="color:#6C7B8A">${datos.titular} · ${cuenta}</p>
+      <p class="text-xs" style="color:#6C7B8A">Ciclo escolar ${datos.ciclo_nombre || (ciclo ? ciclo.nombre : ESCUELA.ciclo)}</p>
       <p class="text-xs mb-2" style="color:#6C7B8A">Del ${est.fechaInicioTexto} al ${est.fechaFinTexto}</p>
       <div class="grid grid-cols-2 gap-2 mb-3 text-xs" style="color:#1C2B3A">
         <div>Balance inicial<br><b>${dinero(est.balanceInicial)}</b></div>
@@ -350,18 +371,19 @@ async function consultar(cuenta) {
               <span style="color:#6C7B8A">${new Date(f.creado_en).toLocaleString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
               <b style="color:${f.es_entrada ? "#3F7A5E" : "#B5453A"}">${f.es_entrada ? "+" : "−"} ${dinero(f.monto)}</b>
             </div>
-            <p class="text-xs" style="color:#1C2B3A">${f.tipo} — ${f.concepto || ""}</p>
+            <p class="text-xs" style="color:#1C2B3A">${(f.tipo.startsWith("Transferencia") || f.tipo === "Saldo inicial" || f.tipo === "Traspaso de saldo") ? (f.concepto || f.tipo) : f.tipo + " — " + (f.concepto || "")}</p>
             <p class="text-xs" style="color:#6C7B8A">Balance: ${dinero(f.balance)}</p>
           </div>`).join("")}
       </div>
     </div>`;
 
   document.getElementById("pubPdf").addEventListener("click", () => {
-    generarReporteEstadoCuentaPDF({
+    cicloPdf = datos.ciclo_nombre || (ciclo ? ciclo.nombre : null);
+    try { generarReporteEstadoCuentaPDF({
       titular: datos.titular, cargo: etiquetaCargo(c), rol: c.rol, comite: c.comite_nombre, cuenta,
       fechaInicioTexto: est.fechaInicioTexto, fechaFinTexto: est.fechaFinTexto,
       balanceInicial: est.balanceInicial, filas: est.filas, directorNombre: datos.director_nombre || "—",
-    });
+    }); } finally { cicloPdf = null; }
   });
 }
 

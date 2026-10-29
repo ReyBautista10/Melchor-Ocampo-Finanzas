@@ -37,6 +37,7 @@ function cicloEscolarActual(f) {
   const a = f.getFullYear();
   return f.getMonth() >= 7 ? `${a}-${a + 1}` : `${a - 1}-${a}`;
 }
+let cicloPdf = null; // si no es null, los PDF muestran este ciclo (reportes de ciclos anteriores)
 const ESCUELA = {
   nombre: 'Escuela Primaria "Melchor Ocampo"',
   clave: "20DPR1505H",
@@ -62,7 +63,7 @@ function pdfEncabezado(doc, x0) {
   doc.text(ESCUELA.nombre.toUpperCase(), xt, 16);
   doc.setFont(undefined, "normal"); doc.setFontSize(9);
   doc.text(`Clave del centro de trabajo: ${ESCUELA.clave}`, xt, 22);
-  doc.text(`Ciclo escolar ${ESCUELA.ciclo}`, xt, 27);
+  doc.text(`Ciclo escolar ${cicloPdf || ESCUELA.ciclo}`, xt, 27);
   doc.text(ESCUELA.localidad, xt, 32);
   doc.setDrawColor(28, 61, 90); doc.setLineWidth(0.5);
   doc.line(x0, 36, W - x0, 36);
@@ -74,7 +75,7 @@ function pdfEncabezado(doc, x0) {
 function pdfEncabezadoCorrido(doc, x0) {
   const W = doc.internal.pageSize.getWidth();
   doc.setFont(undefined, "normal"); doc.setFontSize(8);
-  doc.text(`${ESCUELA.nombre.toUpperCase()} · Clave ${ESCUELA.clave} · Ciclo escolar ${ESCUELA.ciclo}`, x0, 12);
+  doc.text(`${ESCUELA.nombre.toUpperCase()} · Clave ${ESCUELA.clave} · Ciclo escolar ${cicloPdf || ESCUELA.ciclo}`, x0, 12);
   doc.setDrawColor(28, 61, 90); doc.line(x0, 14, W - x0, 14); doc.setDrawColor(0);
   return 20;
 }
@@ -364,7 +365,16 @@ function aplicarFiltroEnVivo(elId, filtro) {
 // ============================================================
 // Arranque
 // ============================================================
-function init() {
+// Lee de la base el ciclo escolar abierto; si no se puede, se queda el calculado por fecha.
+async function cargarCicloActual() {
+  try {
+    const { data, error } = await sb.rpc("ciclo_actual_obtener");
+    if (!error && data && data[0]) { ESCUELA.ciclo = data[0].nombre; state.cicloActual = data[0]; }
+  } catch (e) { /* se usa el ciclo calculado */ }
+}
+
+async function init() {
+  await cargarCicloActual();
   const params = new URLSearchParams(window.location.search);
   const token = params.get("token");
   if (token) { renderEstablecerPassword(token); return; }
@@ -446,6 +456,7 @@ async function iniciarSesion() {
 
   state.usuario = data[0];
   sessionStorage.setItem("comite_usuario", JSON.stringify(state.usuario));
+  await cargarCicloActual();
   renderApp(); // siempre abre en INICIO
 }
 
@@ -614,6 +625,8 @@ const MENU = [
     desc: "Consulta tu saldo, registra entradas, salidas y transferencias, y revisa o descarga los comprobantes de tus movimientos." },
   { id: "reportes", label: "Reportes", roles: ["Presidente", "Tesorero"],
     desc: "Genera tu estado de cuenta en PDF o el total de un tipo de movimiento (entradas, salidas o transferencias) por periodo." },
+  { id: "ciclos", label: "Ciclo escolar", roles: ["Super Administrador", "Director"],
+    desc: "Cierra el ciclo escolar (solo el Director) para que el saldo pase al nuevo comité, pasa el saldo de un titular anterior al nuevo y consulta o descarga los reportes de ciclos anteriores." },
   { id: "transparencia", label: "Transparencia", roles: ["Super Administrador", "Director"],
     desc: "Comparte con los padres de familia el enlace a la página pública de transparencia por WhatsApp, o imprime su código QR." },
   { id: "logs", label: "Bitácora", roles: ["Super Administrador", "Director"],
@@ -659,6 +672,7 @@ function renderApp(seccion) {
   if (activa === "solicitudes") return renderSolicitudes(main);
   if (activa === "caja") return renderCaja(main);
   if (activa === "reportes") return renderReportes(main);
+  if (activa === "ciclos") return renderCiclos(main);
   if (activa === "transparencia") return renderTransparencia(main);
   if (activa === "logs") return renderLogs(main);
 }
@@ -1145,7 +1159,7 @@ async function renderCaja(main) {
                 <p class="text-sm font-semibold" style="color:${m.es_entrada ? "#3F7A5E" : "#B5453A"}">${m.es_entrada ? "+" : "−"} $${Number(m.monto).toFixed(2)} <span class="text-xs font-normal" style="color:#6C7B8A">(${m.cuenta})</span></p>
                 <p class="text-xs" style="color:#6C7B8A">${new Date(m.creado_en).toLocaleDateString("es-MX")}</p>
               </div>
-              <p class="text-xs" style="color:#1C2B3A">${m.tipo.startsWith("Transferencia") ? m.concepto : m.tipo + " — " + m.concepto}</p>
+              <p class="text-xs" style="color:#1C2B3A">${(m.tipo.startsWith("Transferencia") || m.tipo === "Saldo inicial" || m.tipo === "Traspaso de saldo") ? m.concepto : m.tipo + " — " + m.concepto}</p>
               ${m.comentarios ? `<p class="text-xs" style="color:#6C7B8A">${m.comentarios}</p>` : ""}
               <div class="flex items-center gap-3 mt-1">
                 ${m.comprobante_path ? `<button class="verComprobanteBtn text-xs underline" data-idx="${i}" style="color:${COLOR}">Ver comprobante</button><button class="descargarComprobanteBtn text-xs underline" data-idx="${i}" style="color:${COLOR}">Descargar</button>` : ""}
@@ -1519,16 +1533,21 @@ function periodoLeer(id) {
   return { ...base, fechaInicio: fi, fechaFin: ff, texto: "Personalizado" };
 }
 
-// hist = movimientos de la cuenta en orden ascendente (es_entrada, monto, creado_en)
-function construirEstadoCuenta(hist, saldoActual, rango) {
-  const neto = hist.filter(h => new Date(h.creado_en) >= rango.fechaInicio)
+// hist = movimientos de la cuenta DENTRO DEL CICLO, en orden ascendente (es_entrada, monto, creado_en)
+// saldoInicialCiclo = saldo con el que empezó el ciclo; ciclo = { fecha_inicio, fecha_fin, estado } (opcional)
+function construirEstadoCuenta(hist, saldoInicialCiclo, rango, ciclo) {
+  const antes = hist.filter(h => new Date(h.creado_en) < rango.fechaInicio)
     .reduce((s, h) => s + (h.es_entrada ? Number(h.monto) : -Number(h.monto)), 0);
-  const balanceInicial = Number(saldoActual) - neto;
+  const balanceInicial = Number(saldoInicialCiclo) + antes;
   let corrido = balanceInicial;
   const filas = hist.filter(h => { const f = new Date(h.creado_en); return f >= rango.fechaInicio && f <= rango.fechaFin; })
     .map(f => { corrido += f.es_entrada ? Number(f.monto) : -Number(f.monto); return { ...f, balance: corrido }; });
-  const ini = rango.modo === "completo" ? (hist.length ? new Date(hist[0].creado_en) : new Date()) : rango.fechaInicio;
-  const fin = rango.modo === "completo" ? new Date() : rango.fechaFin;
+  const cerrado = ciclo && ciclo.estado === "Cerrado" && ciclo.fecha_fin;
+  const fechaDe = (txt) => new Date(txt + "T12:00:00");
+  const ini = rango.modo === "completo"
+    ? (ciclo && ciclo.fecha_inicio ? fechaDe(ciclo.fecha_inicio) : (hist.length ? new Date(hist[0].creado_en) : new Date()))
+    : rango.fechaInicio;
+  const fin = rango.modo === "completo" ? (cerrado ? fechaDe(ciclo.fecha_fin) : new Date()) : rango.fechaFin;
   return {
     balanceInicial, filas,
     fechaInicioTexto: ini.toLocaleDateString("es-MX"),
@@ -1536,6 +1555,191 @@ function construirEstadoCuenta(hist, saldoActual, rango) {
   };
 }
 
+// Genera el estado de cuenta (PDF) de un cargo en un ciclo cualquiera.
+// Devuelve { error } o { ok:true }. Sirve para Reportes (Presidente/Tesorero) y para la sección Ciclo escolar (Director/Super Admin).
+async function estadoCuentaDeCiclo({ usuarioId, titular, rol, comite, cuenta, ciclo, rango }) {
+  const [h, sa] = await Promise.all([
+    sb.rpc("cuenta_historial_completo", { p_usuario_id: usuarioId, p_cuenta: cuenta, p_ciclo_id: ciclo.id }),
+    sb.rpc("cuenta_saldos_ciclo", { p_usuario_id: usuarioId, p_ciclo_id: ciclo.id }),
+  ]);
+  if (h.error) return { error: h.error };
+  if (sa.error) return { error: sa.error };
+  const saldos = (sa.data || []).find(x => x.cuenta === cuenta);
+  const est = construirEstadoCuenta(h.data || [], saldos ? saldos.saldo_inicial : 0, rango, ciclo);
+  let directorNombre = ciclo.director_nombre;
+  if (!directorNombre) {
+    const d = await sb.rpc("director_actual_obtener");
+    directorNombre = (d.data && d.data[0] && d.data[0].nombre_completo) || "—";
+  }
+  cicloPdf = ciclo.nombre;
+  try {
+    generarReporteEstadoCuentaPDF({
+      titular, cargo: `${rol} de ${comite || "—"}`.toUpperCase(), rol, comite: comite || "—", cuenta,
+      fechaInicioTexto: est.fechaInicioTexto, fechaFinTexto: est.fechaFinTexto,
+      balanceInicial: est.balanceInicial, filas: est.filas, directorNombre, cicloNombre: ciclo.nombre,
+    });
+  } finally { cicloPdf = null; }
+  return { ok: true };
+}
+
+
+
+// ============================================================
+// Ciclo escolar (Director / Super Administrador)
+// ============================================================
+async function renderCiclos(main) {
+  main.innerHTML = "";
+  const esDirector = state.usuario.rol === "Director";
+  const dinero = (n) => "$" + Number(n || 0).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fecha = (t) => t ? new Date(t + "T12:00:00").toLocaleDateString("es-MX") : "—";
+
+  const [rc, ru] = await conProgreso("Cargando ciclos escolares…", () => Promise.all([
+    sb.rpc("ciclos_listar"),
+    esDirector ? sb.rpc("usuarios_listar", { p_solicitante_id: state.usuario.id }) : Promise.resolve({ data: [] }),
+  ]));
+  if (rc.error) { main.innerHTML = errBox(traducirError(rc.error) + " (¿ya ejecutaste el SQL de ciclos escolares?)"); return; }
+  const ciclos = rc.data || [];
+  const actual = ciclos.find(c => c.estado === "Abierto");
+  const usuarios = ru.data || [];
+  const sigNombre = (() => { if (!actual) return ""; const a = Number(String(actual.nombre).split("-")[0]); return `${a + 1}-${a + 2}`; })();
+
+  // Titulares anteriores (inhabilitados) con saldo, y posibles nuevos titulares del mismo cargo
+  const anteriores = usuarios.filter(u => (u.rol === "Presidente" || u.rol === "Tesorero") && !u.activo &&
+    (Number(u.saldo_caja_chica) > 0 || Number(u.saldo_acreimex || 0) > 0));
+
+  main.innerHTML = `
+    <h2 class="text-lg font-bold mb-4" style="color:${COLOR}">Ciclo escolar</h2>
+    <div class="max-w-2xl space-y-4">
+
+      <div class="p-4 rounded-xl bg-white border" style="border-color:#E1DED5">
+        <p class="text-xs" style="color:#6C7B8A">Ciclo escolar actual</p>
+        <p class="text-2xl font-bold" style="color:${COLOR}">${actual ? actual.nombre : "—"}</p>
+        <p class="text-xs" style="color:#6C7B8A">${actual ? "Abierto desde el " + fecha(actual.fecha_inicio) : "No hay un ciclo abierto."}</p>
+      </div>
+
+      ${esDirector && actual ? `
+      <div class="p-4 rounded-xl bg-white border" style="border-color:#E1DED5">
+        <p class="text-sm font-semibold mb-1" style="color:${COLOR}">Cerrar el ciclo ${actual.nombre} y abrir el ${sigNombre}</p>
+        <p class="text-xs mb-3" style="color:#6C7B8A">Hazlo cuando termine el ciclo y el nuevo comité tome posesión. Al cerrarlo:</p>
+        <ul class="text-xs mb-3 list-disc pl-5 space-y-1" style="color:#1C2B3A">
+          <li>Los reportes del ciclo ${actual.nombre} se quedan guardados con ese ciclo y con los nombres del comité anterior (ya no se pueden modificar).</li>
+          <li>El saldo de cada cuenta pasa al ciclo ${sigNombre} como «Saldo inicial del ciclo anterior».</li>
+          <li>El ciclo que aparece en pantallas y PDF cambia a ${sigNombre}.</li>
+          <li>Esta acción no se puede deshacer.</li>
+        </ul>
+        <button id="cicloAbrirCierre" class="px-3 py-2 rounded-lg text-sm font-bold text-white" style="background:#B5453A">Cerrar ciclo escolar</button>
+        <div id="cicloCierreForm" class="hidden mt-3">
+          <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Contraseña del Director para confirmar</label>
+          ${campoPassword("cicloPass", "mb-2")}
+          <div id="cicloCierreMsg"></div>
+          <div class="flex gap-2">
+            <button id="cicloConfirmar" class="px-3 py-2 rounded-lg text-sm font-bold text-white" style="background:#B5453A">Sí, cerrar y abrir el ${sigNombre}</button>
+            <button id="cicloCancelar" class="px-3 py-2 rounded-lg text-sm font-semibold" style="background:#F4F1EB; color:${COLOR}">Cancelar</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="p-4 rounded-xl bg-white border" style="border-color:#E1DED5">
+        <p class="text-sm font-semibold mb-1" style="color:${COLOR}">Pasar el saldo al nuevo titular de un cargo</p>
+        <p class="text-xs mb-3" style="color:#6C7B8A">Cuando entra una persona nueva a un cargo (por ejemplo, un nuevo Tesorero), el dinero que tenía el titular anterior pasa a la persona nueva. Primero inhabilita al titular anterior y da de alta al nuevo en la sección Usuarios.</p>
+        ${anteriores.length === 0 ? `<p class="text-xs" style="color:#6C7B8A">No hay titulares anteriores con saldo pendiente.</p>` : `
+        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Titular anterior (inhabilitado)</label>
+        <select id="trAnterior" class="w-full px-3 py-2 rounded-lg text-sm mb-3 outline-none border" style="border-color:#E1DED5">
+          ${anteriores.map(u => `<option value="${u.id}">${u.nombre_completo} — ${u.rol} de ${u.comite_nombre || "—"} (Caja chica ${dinero(u.saldo_caja_chica)}${u.saldo_acreimex !== null && u.saldo_acreimex !== undefined ? ", Acreimex " + dinero(u.saldo_acreimex) : ""})</option>`).join("")}
+        </select>
+        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Nuevo titular</label>
+        <select id="trNuevo" class="w-full px-3 py-2 rounded-lg text-sm mb-3 outline-none border" style="border-color:#E1DED5"></select>
+        <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Contraseña del Director</label>
+        ${campoPassword("trPass", "mb-2")}
+        <div id="trMsg"></div>
+        <button id="trConfirmar" class="px-3 py-2 rounded-lg text-sm font-bold text-white" style="background:${COLOR}">Pasar saldo</button>`}
+      </div>` : ""}
+
+      <div class="p-4 rounded-xl bg-white border" style="border-color:#E1DED5">
+        <p class="text-sm font-semibold mb-1" style="color:${COLOR}">Consultar reportes por ciclo</p>
+        <p class="text-xs mb-3" style="color:#6C7B8A">Elige un ciclo para ver los cargos de ese comité y descargar su estado de cuenta, tal como quedó en ese ciclo.</p>
+        <select id="conCiclo" class="w-full px-3 py-2 rounded-lg text-sm mb-3 outline-none border" style="border-color:#E1DED5">
+          ${ciclos.map(c => `<option value="${c.id}" ${c.estado === "Abierto" ? "selected" : ""}>${c.nombre}${c.estado === "Abierto" ? " (actual)" : " (cerrado el " + fecha(c.fecha_fin) + ")"}</option>`).join("")}
+        </select>
+        <div id="conLista"></div>
+      </div>
+    </div>`;
+
+  // ---- Cierre de ciclo
+  if (esDirector && actual) {
+    const form = document.getElementById("cicloCierreForm");
+    document.getElementById("cicloAbrirCierre").addEventListener("click", () => { form.classList.remove("hidden"); document.getElementById("cicloPass").focus(); });
+    document.getElementById("cicloCancelar").addEventListener("click", () => { form.classList.add("hidden"); document.getElementById("cicloPass").value = ""; document.getElementById("cicloCierreMsg").innerHTML = ""; });
+    document.getElementById("cicloConfirmar").addEventListener("click", async () => {
+      const msg = document.getElementById("cicloCierreMsg");
+      const pass = document.getElementById("cicloPass").value;
+      if (!pass) { msg.innerHTML = errBox("Escribe tu contraseña de Director."); return; }
+      const { data, error } = await conProgreso("Cerrando el ciclo escolar…", () => sb.rpc("ciclo_cerrar", { p_director_id: state.usuario.id, p_password: pass }));
+      if (error) { msg.innerHTML = errBox(traducirError(error)); return; }
+      await cargarCicloActual();
+      avisoGlobal(`Ciclo ${data[0].ciclo_cerrado} cerrado. Ya está abierto el ciclo ${data[0].ciclo_nuevo}.`, "ok");
+      renderApp("ciclos");
+    });
+
+    // ---- Pasar saldo a nuevo titular
+    if (anteriores.length) {
+      const selAnt = document.getElementById("trAnterior"), selNue = document.getElementById("trNuevo");
+      const llenarNuevos = () => {
+        const a = anteriores.find(u => u.id === selAnt.value);
+        const cand = usuarios.filter(u => u.activo && u.rol === a.rol && u.comite_id === a.comite_id && u.id !== a.id);
+        selNue.innerHTML = cand.length
+          ? cand.map(u => `<option value="${u.id}">${u.nombre_completo}</option>`).join("")
+          : `<option value="">(No hay un nuevo titular habilitado para este cargo)</option>`;
+      };
+      selAnt.addEventListener("change", llenarNuevos); llenarNuevos();
+      document.getElementById("trConfirmar").addEventListener("click", async () => {
+        const msg = document.getElementById("trMsg");
+        const pass = document.getElementById("trPass").value;
+        if (!selNue.value) { msg.innerHTML = errBox("Primero da de alta al nuevo titular de este cargo en la sección Usuarios."); return; }
+        if (!pass) { msg.innerHTML = errBox("Escribe tu contraseña de Director."); return; }
+        const { error } = await conProgreso("Pasando el saldo…", () => sb.rpc("cargo_traspasar_saldo", {
+          p_director_id: state.usuario.id, p_password: pass, p_usuario_anterior_id: selAnt.value, p_usuario_nuevo_id: selNue.value }));
+        if (error) { msg.innerHTML = errBox(traducirError(error)); return; }
+        avisoGlobal("El saldo pasó al nuevo titular.", "ok");
+        renderApp("ciclos");
+      });
+    }
+  }
+
+  // ---- Consulta por ciclo
+  const lista = document.getElementById("conLista");
+  async function cargarLista() {
+    const ciclo = ciclos.find(c => c.id === document.getElementById("conCiclo").value);
+    lista.innerHTML = "";
+    const { data, error } = await conProgreso("Consultando el ciclo…", () => sb.rpc("ciclo_cargos_listar", { p_solicitante_id: state.usuario.id, p_ciclo_id: ciclo.id }));
+    if (error) { lista.innerHTML = errBox(traducirError(error)); return; }
+    const cargos = data || [];
+    if (!cargos.length) { lista.innerHTML = `<p class="text-xs" style="color:#6C7B8A">Este ciclo no tiene cargos registrados.</p>`; return; }
+    lista.innerHTML = `<div class="space-y-2">` + cargos.map((c, i) => `
+      <div class="p-3 rounded-xl border" style="border-color:#E1DED5">
+        <p class="text-sm font-semibold" style="color:${COLOR}">${c.nombre_completo}</p>
+        <p class="text-xs mb-2" style="color:#6C7B8A">${c.rol} de ${c.comite_nombre || "—"}</p>
+        <p class="text-xs" style="color:#1C2B3A">Caja chica: inicio ${dinero(c.saldo_inicial_caja)} → final ${dinero(c.saldo_final_caja)}</p>
+        ${c.tiene_acreimex ? `<p class="text-xs" style="color:#1C2B3A">Acreimex: inicio ${dinero(c.saldo_inicial_acreimex)} → final ${dinero(c.saldo_final_acreimex)}</p>` : ""}
+        <div class="flex gap-2 mt-2">
+          <button class="cicloPdfBtn px-2.5 py-1 rounded-lg text-xs font-semibold" data-i="${i}" data-cuenta="Caja chica" style="background:#F4F1EB; color:${COLOR}">📄 Estado de cuenta · Caja chica</button>
+          ${c.tiene_acreimex ? `<button class="cicloPdfBtn px-2.5 py-1 rounded-lg text-xs font-semibold" data-i="${i}" data-cuenta="Acreimex" style="background:#F4F1EB; color:${COLOR}">📄 Acreimex</button>` : ""}
+        </div>
+      </div>`).join("") + `</div><div id="conMsg" class="mt-2"></div>`;
+    lista.querySelectorAll(".cicloPdfBtn").forEach(b => b.addEventListener("click", async () => {
+      const c = cargos[Number(b.dataset.i)];
+      const rango = { modo: "completo", fechaInicio: new Date(2000, 0, 1), fechaFin: new Date(2100, 0, 1) };
+      try {
+        const r = await conProgreso("Generando estado de cuenta en PDF…", () => estadoCuentaDeCiclo({
+          usuarioId: c.usuario_id, titular: c.nombre_completo, rol: c.rol, comite: c.comite_nombre, cuenta: b.dataset.cuenta, ciclo, rango }));
+        if (r.error) { document.getElementById("conMsg").innerHTML = errBox(traducirError(r.error)); return; }
+        document.getElementById("conMsg").innerHTML = okBox("Estado de cuenta generado.");
+      } catch (e) { document.getElementById("conMsg").innerHTML = errBox("No se pudo generar el PDF: " + traducirError(e)); }
+    }));
+  }
+  document.getElementById("conCiclo").addEventListener("change", cargarLista);
+  cargarLista();
+}
 
 // ============================================================
 // Transparencia (Director / Super Administrador): enlace por WhatsApp y QR imprimible
@@ -1621,6 +1825,9 @@ async function renderReportes(main) {
   const tieneAcreimex = cuenta.saldo_acreimex !== null;
   let opcion = "estado";
   let estPeriodo = { modo: "completo" };
+  let ciclos = [];
+  { const r = await sb.rpc("ciclos_listar"); if (!r.error && r.data) ciclos = r.data; }
+  let cicloSel = (ciclos.find(c => c.estado === "Abierto") || ciclos[0] || {}).id || null;
 
   const dinero = (n) => "$" + Number(n).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -1636,6 +1843,11 @@ async function renderReportes(main) {
           <p class="text-xs mb-3" style="color:#6C7B8A">${opcion === "estado"
             ? "Incluye todos los movimientos del periodo (entradas, salidas y transferencias) con su balance."
             : "Elige un solo tipo de movimiento para conocer el total de recursos movidos en el periodo."}</p>
+          ${ciclos.length > 1 ? `
+          <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Ciclo escolar</label>
+          <select id="repCiclo" class="w-full px-3 py-2 rounded-lg text-sm mb-3 outline-none border" style="border-color:#E1DED5">
+            ${ciclos.map(c => `<option value="${c.id}" ${c.id === cicloSel ? "selected" : ""}>${c.nombre}${c.estado === "Abierto" ? " (actual)" : " (cerrado)"}</option>`).join("")}
+          </select>` : ""}
           ${tieneAcreimex ? `
           <label class="block text-xs font-semibold mb-1" style="color:#6C7B8A">Cuenta</label>
           <select id="repCuenta" class="w-full px-3 py-2 rounded-lg text-sm mb-3 outline-none border" style="border-color:#E1DED5">
@@ -1668,33 +1880,27 @@ async function renderReportes(main) {
     msg.innerHTML = ""; res.innerHTML = "";
 
     const cuentaRep = tieneAcreimex ? document.getElementById("repCuenta").value : "Caja chica";
+    const selC = document.getElementById("repCiclo");
+    if (selC) cicloSel = selC.value;
+    const ciclo = ciclos.find(c => c.id === cicloSel) || { id: cicloSel, nombre: ESCUELA.ciclo, estado: "Abierto" };
     const rango = periodoLeer("rep");
     if (rango.error) { msg.innerHTML = errBox(rango.error); return; }
     estPeriodo = { modo: rango.modo, mes: rango.mes, anio: rango.anio, desde: rango.desde, hasta: rango.hasta };
 
     const consulta = await conProgreso("Consultando movimientos…", async () => {
-      const h = await sb.rpc("cuenta_historial_completo", { p_usuario_id: state.usuario.id, p_cuenta: cuentaRep });
-      if (h.error || opcion !== "estado") return { h };
-      actualizarProgreso("Obteniendo datos del Director…");
-      const d = await sb.rpc("director_actual_obtener");
-      return { h, d };
+      if (opcion === "estado") return { estado: true };
+      const h = await sb.rpc("cuenta_historial_completo", { p_usuario_id: state.usuario.id, p_cuenta: cuentaRep, p_ciclo_id: ciclo.id });
+      return { h };
     });
-    const { data: historial, error: errHist } = consulta.h;
-    if (errHist) { msg.innerHTML = errBox(errHist.message); return; }
-    const hist = historial || [];
     const cargo = `${cuenta.rol} de ${cuenta.comite_nombre || "—"}`.toUpperCase();
 
     if (opcion === "estado") {
-      const directorData = consulta.d && consulta.d.data;
-      const nombreDirector = (directorData && directorData[0] && directorData[0].nombre_completo) || "—";
-      const saldoActual = cuentaRep === "Acreimex" ? cuenta.saldo_acreimex : cuenta.saldo_caja_chica;
-      const est = construirEstadoCuenta(hist, saldoActual, rango);
       try {
-        await conProgreso("Generando estado de cuenta en PDF…", async () => generarReporteEstadoCuentaPDF({
-          titular: state.usuario.nombre_completo, cargo, rol: cuenta.rol, comite: cuenta.comite_nombre || "—", cuenta: cuentaRep,
-          fechaInicioTexto: est.fechaInicioTexto, fechaFinTexto: est.fechaFinTexto,
-          balanceInicial: est.balanceInicial, filas: est.filas, directorNombre: nombreDirector,
+        const r = await conProgreso("Generando estado de cuenta en PDF…", () => estadoCuentaDeCiclo({
+          usuarioId: state.usuario.id, titular: state.usuario.nombre_completo, rol: cuenta.rol, comite: cuenta.comite_nombre,
+          cuenta: cuentaRep, ciclo, rango,
         }));
+        if (r.error) { msg.innerHTML = errBox(traducirError(r.error)); return; }
       } catch (e) {
         msg.innerHTML = errBox("No se pudo generar el PDF: " + traducirError(e));
         return;
@@ -1703,9 +1909,13 @@ async function renderReportes(main) {
       return;
     }
 
+    const { data: historial, error: errHist } = consulta.h;
+    if (errHist) { msg.innerHTML = errBox(traducirError(errHist)); return; }
+    const hist = historial || [];
+
     // Reporte por Movimiento (un solo tipo)
     const tipo = document.getElementById("repTipo").value;
-    const categoriaDe = (t) => t === "Entrada" ? "Entrada" : t === "Salida" ? "Salida" : "Transferencia";
+    const categoriaDe = (t) => t === "Entrada" ? "Entrada" : t === "Salida" ? "Salida" : t.startsWith("Transferencia") ? "Transferencia" : "Otro";
     const filas = hist.filter(h => {
       const f = new Date(h.creado_en);
       return f >= rango.fechaInicio && f <= rango.fechaFin && categoriaDe(h.tipo) === tipo;
@@ -1715,7 +1925,7 @@ async function renderReportes(main) {
     const recibidas = filas.filter(h => h.es_entrada).reduce((s, h) => s + Number(h.monto), 0);
     const nombreTipo = tipo === "Entrada" ? "Entradas" : tipo === "Salida" ? "Salidas" : "Transferencias";
     const periodoTxt = rango.modo === "completo"
-      ? `Completo (hasta ${new Date().toLocaleDateString("es-MX")})`
+      ? `Ciclo ${ciclo.nombre} completo${ciclo.estado === "Cerrado" && ciclo.fecha_fin ? " (hasta " + new Date(ciclo.fecha_fin + "T12:00:00").toLocaleDateString("es-MX") + ")" : " (hasta " + new Date().toLocaleDateString("es-MX") + ")"}`
       : rango.modo === "mensual" ? rango.texto
       : `${rango.fechaInicio.toLocaleDateString("es-MX")} al ${rango.fechaFin.toLocaleDateString("es-MX")}`;
 
@@ -1737,6 +1947,7 @@ async function renderReportes(main) {
       try {
         await conProgreso("Generando PDF del reporte…", async () => {
           const doc = new window.jspdf.jsPDF({ unit: "mm", format: "letter", orientation: "portrait" });
+          cicloPdf = ciclo.nombre;
           pdfEncabezado(doc, 12);
           doc.setFontSize(13); doc.setFont(undefined, "bold");
           doc.text(`REPORTE POR MOVIMIENTO: ${nombreTipo.toUpperCase()}`, 12, 46);
@@ -1769,7 +1980,7 @@ async function renderReportes(main) {
         });
       } catch (e) {
         avisoGlobal("No se pudo generar el PDF: " + traducirError(e), "error");
-      }
+      } finally { cicloPdf = null; }
     });
   }
 
