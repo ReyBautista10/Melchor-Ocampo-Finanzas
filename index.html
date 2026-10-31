@@ -620,7 +620,7 @@ const MENU = [
   { id: "comites", label: "Comités", roles: ["Super Administrador", "Director"],
     desc: "Consulta los comités de la escuela y agrega nuevos comités." },
   { id: "solicitudes", label: "Solicitudes de recuperación", roles: ["Super Administrador", "Director"],
-    desc: "Aquí aparecen los enlaces pendientes para activar cuentas nuevas o recuperar contraseñas. Cópialos y compártelos por WhatsApp." },
+    desc: "Aquí aparecen los enlaces pendientes para activar cuentas nuevas o recuperar contraseñas. Con un botón los envías por WhatsApp al número registrado de cada usuario." },
   { id: "caja", label: "Mi caja", roles: ["Presidente", "Tesorero"],
     desc: "Consulta tu saldo, registra entradas, salidas y transferencias, y revisa o descarga los comprobantes de tus movimientos." },
   { id: "reportes", label: "Reportes", roles: ["Presidente", "Tesorero"],
@@ -833,9 +833,12 @@ async function renderUsuarios(main) {
       const link = `${window.location.origin}${window.location.pathname}?token=${token}`;
       document.getElementById("tokenGeneradoWrap").innerHTML = `
         <div class="p-4 rounded-xl mt-3" style="background:#E6F0EA; border:1px solid #3F7A5E">
-          <p class="text-sm font-semibold mb-1" style="color:${COLOR}">Listo. Comparte este link por WhatsApp:</p>
-          <p class="text-xs break-all" style="color:#1C2B3A">${link}</p>
+          <p class="text-sm font-semibold mb-2" style="color:${COLOR}">Listo. Envía el enlace de activación a ${nombre}:</p>
+          <button id="btnEnviarWaNuevo" class="w-full py-2 rounded-lg text-sm font-bold text-white" style="background:#3F7A5E">Enviar por WhatsApp</button>
         </div>`;
+      document.getElementById("btnEnviarWaNuevo").addEventListener("click", () => {
+        enviarEnlaceWhatsApp(telefono, { nombre, tipo: "Activacion", link });
+      });
     }
 
     // Paso 1: ver si ese usuario ya existe en la base de datos (aunque esté
@@ -879,8 +882,8 @@ async function renderUsuarios(main) {
         return;
       }
 
+      await renderUsuarios(main);
       mostrarLinkGenerado(reactivado[0].token_activacion);
-      renderUsuarios(main);
       return;
     }
 
@@ -897,8 +900,8 @@ async function renderUsuarios(main) {
     }));
     if (error) { msg.innerHTML = errBox(error.message); return; }
 
+    await renderUsuarios(main);
     mostrarLinkGenerado(data[0].token_activacion);
-    renderUsuarios(main);
   });
 
   main.querySelectorAll(".uEstadoBtn").forEach(b => b.addEventListener("click", async () => {
@@ -1062,6 +1065,29 @@ async function renderComites(main) {
 }
 
 // ---------- Solicitudes de recuperación/activación ----------
+// ---- Envío por WhatsApp de enlaces de activación / recuperación ----
+function telefonoWhatsApp(tel) {
+  let d = String(tel || "").replace(/\D/g, "");
+  if (d.length === 13 && d.startsWith("521")) d = "52" + d.slice(3); // formato antiguo de celular
+  if (d.length === 10) d = "52" + d;                                   // número de México sin lada de país
+  return d.length >= 11 ? d : "";
+}
+function mensajeEnlaceWhatsApp({ nombre, tipo, link, expira }) {
+  const esRecup = String(tipo || "").toLowerCase().startsWith("recuper");
+  const intro = esRecup
+    ? "Recibimos su solicitud para recuperar la contraseña del Sistema de Comités Escolares. Para crear una nueva contraseña ingrese al siguiente enlace:"
+    : "Se creó su cuenta en el Sistema de Comités Escolares. Para crear su contraseña ingrese al siguiente enlace:";
+  const vence = expira ? `vence el ${new Date(expira).toLocaleString("es-MX")}` : "tiene fecha de vencimiento";
+  return `Hola ${nombre}, le saluda la Dirección de la ${ESCUELA.nombre}.\n\n${intro}\n\n${link}\n\nEl enlace es personal, solo sirve una vez y ${vence}; por favor no lo comparta con nadie.`;
+}
+// Devuelve true si pudo abrir WhatsApp; false si el teléfono no es válido.
+function enviarEnlaceWhatsApp(telefono, datos) {
+  const num = telefonoWhatsApp(telefono);
+  if (!num) { avisoGlobal("El teléfono registrado no es válido. Corrígelo en Usuarios (toca el nombre y edita el teléfono).", "error"); return false; }
+  window.open(`https://wa.me/${num}?text=${encodeURIComponent(mensajeEnlaceWhatsApp(datos))}`, "_blank");
+  return true;
+}
+
 async function renderSolicitudes(main) {
   main.innerHTML = "";
   const { data, error } = await conProgreso("Cargando solicitudes…", () => sb.rpc("tokens_pendientes_listar", { p_solicitante_id: state.usuario.id }));
@@ -1074,19 +1100,16 @@ async function renderSolicitudes(main) {
         <div class="p-3 rounded-xl bg-white border" style="border-color:#E1DED5">
           <p class="text-sm font-semibold" style="color:${COLOR}">${t.nombre_completo} <span class="text-xs font-normal" style="color:#6C7B8A">(${t.usuario})</span></p>
           <p class="text-xs mb-2" style="color:#6C7B8A">${t.tipo} · Tel: ${t.telefono} · Vence: ${new Date(t.expira_en).toLocaleString("es-MX")}</p>
-          <div class="flex gap-2">
-            <input readonly id="linkTok${i}" value="${window.location.origin}${window.location.pathname}?token=${t.token}" class="flex-1 px-2 py-1 rounded text-xs border" style="border-color:#E1DED5" />
-            <button class="copiarBtn px-2 py-1 rounded-lg text-xs font-semibold" data-i="${i}" style="background:#F4F1EB; color:${COLOR}">Copiar</button>
-          </div>
+          <button class="enviarWaBtn w-full py-2 rounded-lg text-sm font-bold text-white" data-i="${i}" style="background:#3F7A5E">Enviar por WhatsApp</button>
         </div>`).join("")}
     </div>`;
 
-  main.querySelectorAll(".copiarBtn").forEach(b => b.addEventListener("click", () => {
-    const input = document.getElementById(`linkTok${b.dataset.i}`);
-    input.select();
-    navigator.clipboard.writeText(input.value);
-    b.textContent = "¡Copiado!";
-    setTimeout(() => { b.textContent = "Copiar"; }, 1500);
+  main.querySelectorAll(".enviarWaBtn").forEach(b => b.addEventListener("click", () => {
+    const t = data[Number(b.dataset.i)];
+    enviarEnlaceWhatsApp(t.telefono, {
+      nombre: t.nombre_completo, tipo: t.tipo, expira: t.expira_en,
+      link: `${window.location.origin}${window.location.pathname}?token=${t.token}`,
+    });
   }));
 }
 
