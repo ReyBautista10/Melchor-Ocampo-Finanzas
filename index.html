@@ -418,6 +418,44 @@ const VOZ = (() => {
     return null;
   }
 
+  // Texto en minúsculas sin acentos ni signos, conservando la longitud original (para ubicar posiciones)
+  const plano = (t) => String(t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[¿?¡!.,;:$]/g, " ");
+  const RX_SAL = /\b(salida|egreso|gasto|gastar|gaste|gastamos|retiro|pagar|pago|pague|pagamos|pagare|pagaremos|comprar|compra|compre|compramos|adquirir|adquiri|desembolso|abonar|abone|liquidar|liquide)\b/;
+  const RX_ENT = /\b(entrada|ingreso|ingresar|ingresaron|deposito|depositar|depositaron|cobro|cobrar|cobre|cobramos|recibir|recibi|recibimos|recibo|aportacion|cooperacion|donativo|donacion|cuota)\b/;
+  const SERVICIOS = /^(la |el |los |las |del |de la )*(luz|agua|telefono|internet|renta|honorarios|mano de obra|servicio|servicios|flete|fletes|transporte|reparacion|reparaciones|mantenimiento|instalacion|impresion|copias|fotocopias|sueldo|sueldos|salario|jornal|jornales|albanil|plomero|electricista|pintor|limpieza de|recoleccion)/;
+  const cap = (s) => { s = String(s || "").trim(); return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; };
+  const NUMW = Object.keys(UNID).concat(Object.keys(DEC), Object.keys(CENT), ["mil", "millon", "millones"]).join("|");
+  const RX_CORTE = new RegExp("\\s+(?:(?:por|de|en|con|a)\\s+)?(?:(?:la|una)\\s+(?:cantidad|suma)\\s+de\\s+|un\\s+(?:monto|total|importe)\\s+de\\s+|el\\s+(?:monto|total|importe)\\s+de\\s+)?(?:\\$\\s?\\d|\\d|(?:(?:" + NUMW + ")\\s+(?:y\\s+)?)+pesos)", "i");
+
+  // Concepto a partir de la intención ("voy a pagar artículos de limpieza por 1000 pesos")
+  function conceptoDeIntencion(texto, verbo, vFin, tipo) {
+    const orig = String(texto || "");
+    let resto = orig.slice(vFin).replace(/^[\s,:]+/, "");
+    const conEsp = " " + resto, corte = conEsp.search(RX_CORTE);
+    resto = (corte >= 0 ? conEsp.slice(0, corte) : conEsp).trim();
+    resto = resto.replace(/^(?:de|por)\s+/i, "").replace(/[\s,.]+$/g, "").trim();
+    // "voy a pagar 1000 pesos por artículos de limpieza": el objeto viene después del monto
+    if (!resto) {
+      const m = orig.match(/\bpesos(?:\s+con\s+\d+\s+centavos)?\s+(?:por|para|de|en|con)\s+(.+)$/i);
+      if (m) resto = m[1].trim();
+    }
+    if (!resto) return "";
+    if (tipo === "Salida" && /^(a|al)\s/i.test(resto)) return `Pago ${resto}`;
+    const v = plano(verbo);
+    const objN = plano(resto).replace(/\s+/g, " ").trim();
+    if (tipo === "Salida") {
+      if (/^(comprar|compra|compre|compramos|adquirir|adquiri)$/.test(v)) return `Pago por concepto de compra de ${resto}`;
+      if (/^(gastar|gasto|gaste|gastamos)$/.test(v)) return `Gasto por concepto de ${resto}`;
+      if (/^(pagar|pago|pague|pagamos|pagare|pagaremos|abonar|abone|liquidar|liquide|desembolso)$/.test(v)) {
+        return SERVICIOS.test(objN) ? `Pago por concepto de ${resto}` : `Pago por concepto de compra de ${resto}`;
+      }
+      return cap(resto);
+    }
+    if (/^(cobrar|cobro|cobre|cobramos)$/.test(v)) return `Cobro por concepto de ${resto}`;
+    if (/^(recibir|recibi|recibimos|recibo|ingresar|ingresaron|deposito|depositar|depositaron)$/.test(v)) return `Ingreso por concepto de ${resto}`;
+    return cap(resto);
+  }
+
   // Concepto: lo que sigue a "concepto de", "concepto", o a "pesos por / para"; respeta el texto original (mayúsculas del dictado)
   function extraerConcepto(textoOriginal, soloExplicito) {
     const t = String(textoOriginal || "").replace(/\s+/g, " ").trim();
@@ -434,8 +472,13 @@ const VOZ = (() => {
     const t = norm(texto);
     const r = { tipo: null, cuenta: null, origen: null, monto: null, concepto: "" };
     if (/\b(transfer\w*|pasar|pasa|mover)\b/.test(t)) r.tipo = "Transferencia";
-    else if (/\b(salida|egreso|gasto|retiro|pago)\b/.test(t)) r.tipo = "Salida";
-    else if (/\b(entrada|ingreso|deposito|cobro|cuota)\b/.test(t)) r.tipo = "Entrada";
+    else {
+      // El tipo lo decide la primera palabra de intención que aparezca (pagar/comprar = salida; cobrar/recibir = entrada)
+      const pre = plano(String(texto || "").replace(/\b(?:por\s+)?concepto\b.*$/i, ""));
+      const a = pre.search(RX_SAL), b = pre.search(RX_ENT);
+      if (a >= 0 && (b < 0 || a < b)) { r.tipo = "Salida"; r.verbo = pre.match(RX_SAL)[1]; r.vPos = a + pre.match(RX_SAL)[0].length - pre.match(RX_SAL)[1].length; r.vFin = a + pre.match(RX_SAL)[0].length; }
+      else if (b >= 0) { r.tipo = "Entrada"; r.verbo = pre.match(RX_ENT)[1]; r.vFin = b + pre.match(RX_ENT)[0].length; }
+    }
 
     const mm = buscarMonto(texto);
     if (mm) r.monto = Math.round(mm.valor * 100) / 100;
@@ -453,6 +496,12 @@ const VOZ = (() => {
       r.cuenta = detectarCuenta(norm(antes));
     }
     r.concepto = extraerConcepto(texto, r.tipo === "Transferencia");
+    if (r.tipo === "Entrada" || r.tipo === "Salida") {
+      const explicito = /\bconcepto\b/i.test(texto);
+      if (explicito) r.concepto = cap(r.concepto);
+      else if (r.vFin != null) { const c = conceptoDeIntencion(texto, r.verbo, r.vFin, r.tipo); r.concepto = c || cap(r.concepto); }
+    }
+    delete r.vPos; delete r.vFin; delete r.verbo;
     r.destinoTexto = "";
     if (r.tipo === "Transferencia" && !r.origen && mm) {
       let tail = mm.palabras.slice(mm.fin).join(" ").replace(/\s*(por )?concepto.*$/, "");
@@ -689,6 +738,9 @@ function crearAsistenteVoz() {
       setResolverFoto(f) { resolverFoto = f; },
     };
 }
+
+// Frase hablada del concepto: evita repetir «concepto» cuando ya empieza con «Pago por concepto de…»
+const conceptoHablado = (c) => /^(pago|cobro|ingreso|gasto)\b/i.test(c) ? `. El concepto es: ${c}` : `, por concepto de ${c}`;
 
 // Flujo de voz: estado de cuenta en PDF (Presidente y Tesorero). No modifica datos: solo genera el reporte.
 async function vozEstadoCuenta(A, ctx, textoInicial) {
@@ -1887,7 +1939,7 @@ async function renderCaja(main) {
             if (q.cancelar) { await decir("Cancelado. No se guardó nada."); cerrar(); return; }
             const rq = VOZ.interpretar(q.texto);
             if (rq.tipo && rq.monto && rq.concepto) { d.concepto = rq.concepto; d.monto = rq.monto; if (rq.cuenta) d.cuenta = rq.cuenta; }
-            else d.concepto = q.texto.replace(/^(por\s+)?(concepto\s+)?(de\s+)?/i, "").trim() || q.texto;
+            else d.concepto = (q.texto.replace(/^(por\s+)?(concepto\s+)?(de\s+)?/i, "").trim() || q.texto).replace(/^./, (x) => x.toUpperCase());
           }
         }
 
@@ -1899,9 +1951,9 @@ async function renderCaja(main) {
           : [["Movimiento", d.tipo], ["Cuenta", d.cuenta], ["Monto", "$" + d.monto.toFixed(2)], ["Concepto", d.concepto]];
         $("vozResumen").innerHTML = `<div class="p-3 rounded-lg mb-2 text-sm" style="background:#E6F0EA; border:1px solid #3F7A5E">${lineas.map(l => `<p><span style="color:#6C7B8A">${l[0]}:</span> <b>${esc(l[1])}</b></p>`).join("")}</div>`;
         const frase = d.tipo === "Entrada"
-          ? `Solicitaste registrar un ingreso de capital por la cantidad de ${VOZ.montoVoz(d.monto)} en ${d.cuenta}, por concepto de ${d.concepto}. ¿Es correcto?`
+          ? `Solicitaste registrar un ingreso de capital por la cantidad de ${VOZ.montoVoz(d.monto)} en ${d.cuenta}${conceptoHablado(d.concepto)}. ¿Es correcto?`
           : d.tipo === "Salida"
-            ? `Solicitaste registrar una salida de ${VOZ.montoVoz(d.monto)} de ${d.cuenta}, por concepto de ${d.concepto}. ¿Es correcto?`
+            ? `Solicitaste registrar una salida de ${VOZ.montoVoz(d.monto)} de ${d.cuenta}${conceptoHablado(d.concepto)}. ¿Es correcto?`
             : d.modo === "otros"
               ? `Solicitaste transferir ${VOZ.montoVoz(d.monto)} a ${d.persona.nombre_completo}, ${d.persona.rol}${d.persona.comite_nombre ? " de " + d.persona.comite_nombre : ""}${d.concepto ? ", por concepto de " + d.concepto : ""}. ¿Es correcto?`
               : `Solicitaste transferir ${VOZ.montoVoz(d.monto)} de ${d.origen} a ${d.destino}. ¿Es correcto?`;
