@@ -489,6 +489,48 @@ const VOZ = (() => {
     });
   }
 
+  // ----- Estado de cuenta: periodo, ciclo y cuenta dichos por voz -----
+  const MESES_N = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+  const mesDe = (t) => { const i = MESES_N.findIndex(m => new RegExp("\\b" + m + "\\b").test(t) || (m === "septiembre" && /\bsetiembre\b/.test(t))); return i; };
+  const iso = (y, m, d) => `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+
+  function esEstadoCuenta(texto) {
+    const t = norm(String(texto || "").replace(/\b(?:por\s+)?concepto\b.*$/i, ""));
+    return /estado de cuenta|estados de cuenta|\b(imprimir|imprime|imprimeme|descargar|descarga|generar|genera)\b.*\b(estado|cuenta|reporte)\b/.test(t);
+  }
+
+  // Regresa { modo, mes, anio, desde, hasta, ciclo: "anterior"|null, cicloNombre, cuenta, claro } ; claro=false si no dijo periodo
+  function interpretarPeriodo(texto, hoy) {
+    hoy = hoy || new Date();
+    const t = norm(texto);
+    const r = { modo: null, mes: null, anio: null, desde: null, hasta: null, ciclo: null, cicloNombre: null, cuenta: detectarCuenta(t), claro: false };
+    const mc = t.match(/(20\d\d)\D{1,6}(20\d\d)/);
+    if (mc) r.cicloNombre = `${mc[1]}-${mc[2]}`;
+    if (/ciclo (anterior|pasado)|ciclo previo|ultimo ciclo cerrado/.test(t)) r.ciclo = "anterior";
+    const anioDicho = (t.match(/\b(20\d\d)\b/) || [])[1];
+    // rango: "del 5 al 20 de octubre" / "del 1 de octubre al 15 de noviembre"
+    let m = t.match(/del (\d{1,2}) de (\w+) (?:de |del )?(?:(20\d\d) )?al (\d{1,2}) de (\w+)(?: (?:de |del )?(20\d\d))?/);
+    if (m && mesDe(m[2]) >= 0 && mesDe(m[5]) >= 0) {
+      const y2 = Number(m[6] || anioDicho || hoy.getFullYear()), y1 = Number(m[3] || (mesDe(m[2]) > mesDe(m[5]) ? y2 - 1 : y2));
+      r.modo = "personalizado"; r.desde = iso(y1, mesDe(m[2]), Number(m[1])); r.hasta = iso(y2, mesDe(m[5]), Number(m[4])); r.claro = true; return r;
+    }
+    m = t.match(/del (\d{1,2}) al (\d{1,2}) de (\w+)(?: (?:de |del )?(20\d\d))?/);
+    if (m && mesDe(m[3]) >= 0) {
+      const y = Number(m[4] || hoy.getFullYear());
+      r.modo = "personalizado"; r.desde = iso(y, mesDe(m[3]), Number(m[1])); r.hasta = iso(y, mesDe(m[3]), Number(m[2])); r.claro = true; return r;
+    }
+    if (/(este|presente|actual) mes|mes actual|mes en curso/.test(t)) { r.modo = "mensual"; r.mes = hoy.getMonth(); r.anio = hoy.getFullYear(); r.claro = true; return r; }
+    if (/mes (pasado|anterior)/.test(t)) { const d = new Date(hoy.getFullYear(), hoy.getMonth() - 1, 1); r.modo = "mensual"; r.mes = d.getMonth(); r.anio = d.getFullYear(); r.claro = true; return r; }
+    const mes = mesDe(t);
+    if (mes >= 0) {
+      r.modo = "mensual"; r.mes = mes;
+      r.anio = anioDicho ? Number(anioDicho) : (mes > hoy.getMonth() ? hoy.getFullYear() - 1 : hoy.getFullYear());
+      r.claro = true; return r;
+    }
+    if (/completo|completa|todo|toda|desde el (inicio|principio|primer)|ciclo (completo|entero)|ciclo (anterior|pasado|actual)|del ciclo/.test(t) || mc) { r.modo = "completo"; r.claro = true; }
+    return r;
+  }
+
   const montoVoz = (n) => {
     const e = Math.floor(n), c = Math.round((n - e) * 100);
     return c ? `${e} pesos con ${c} centavos` : `${e} pesos`;
@@ -554,10 +596,181 @@ const VOZ = (() => {
     });
   }
 
-  return { norm, buscarMonto, buscarPersonas, interpretar, respuesta, montoVoz, hablar, escuchar, detenerEscucha, detenerTodo, soportado, puedeHablar,
+  return { norm, buscarMonto, buscarPersonas, esEstadoCuenta, interpretarPeriodo, interpretar, respuesta, montoVoz, hablar, escuchar, detenerEscucha, detenerTodo, soportado, puedeHablar,
     silenciar: (v) => { silenciado = !!v; }, estaSilenciado: () => silenciado };
 })();
 const esc = (t) => String(t == null ? "" : t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+function crearAsistenteVoz() {
+    let activo = true;
+    let resolverBoton = null;
+    let resolverFoto = null;
+    const modal = document.createElement("div");
+    modal.className = "fixed inset-0 z-50 flex items-center justify-center p-4";
+    modal.style.background = "rgba(28,43,58,0.6)";
+    modal.innerHTML = `
+      <div class="rounded-2xl p-5 bg-white w-full max-w-sm">
+        <div class="flex items-center justify-between mb-2">
+          <p class="text-sm font-bold" style="color:${COLOR}">🎙 Asistente de voz</p>
+          <button id="vozSilencio" class="text-xs underline" style="color:#6C7B8A">${VOZ.estaSilenciado() ? "Activar voz" : "Silenciar voz"}</button>
+        </div>
+        <div id="vozEstado" class="text-sm font-semibold mb-2" style="color:${COLOR}">…</div>
+        <div id="vozOido" class="text-xs mb-2 p-2 rounded-lg" style="background:#F4F1EB; color:#6C7B8A; min-height:2rem"></div>
+        <div id="vozResumen"></div>
+        <div id="vozFotoWrap" class="hidden mb-2">
+          <label class="block w-full text-center py-3 rounded-lg text-sm font-bold text-white cursor-pointer" style="background:${COLOR}">📷 Tomar foto del comprobante
+            <input id="vozFoto" type="file" accept="image/*" capture="environment" class="hidden" />
+          </label>
+        </div>
+        <div id="vozBotones" class="flex gap-2 flex-wrap mb-2"></div>
+        <button id="vozCerrar" class="w-full py-2 rounded-lg text-sm font-semibold" style="background:#F4F1EB; color:${COLOR}">Cancelar</button>
+      </div>`;
+    document.body.appendChild(modal);
+    const $ = (id) => modal.querySelector("#" + id);
+
+    const cerrar = () => { activo = false; VOZ.detenerTodo(); if (resolverBoton) resolverBoton("cancelar"); if (resolverFoto) resolverFoto(null); modal.remove(); };
+    $("vozCerrar").addEventListener("click", cerrar);
+    $("vozSilencio").addEventListener("click", (e) => { VOZ.silenciar(!VOZ.estaSilenciado()); e.target.textContent = VOZ.estaSilenciado() ? "Activar voz" : "Silenciar voz"; if (VOZ.estaSilenciado()) VOZ.detenerTodo(); });
+
+    function botones(lista) {
+      $("vozBotones").innerHTML = lista.map(b => `<button data-r="${b.r}" class="flex-1 py-2 rounded-lg text-sm font-bold text-white" style="background:${b.c}; min-width:5rem">${b.t}</button>`).join("");
+      $("vozBotones").querySelectorAll("button").forEach(b => b.addEventListener("click", () => {
+        if (resolverBoton) { const f = resolverBoton; resolverBoton = null; VOZ.detenerEscucha(); f(b.dataset.r); }
+      }));
+    }
+    const estado = (t) => { if (activo) $("vozEstado").textContent = t; };
+    const decir = async (t) => { if (!activo) return; estado("🔊 " + t); await VOZ.hablar(t); };
+
+    // Escucha una frase; los botones también responden. Regresa { texto } o { boton }
+    async function oir(textoBotones) {
+      if (!activo) return { boton: "cancelar" };
+      estado("🎙 Escuchando… habla ahora");
+      botones(textoBotones || []);
+      const porBoton = new Promise((res) => { resolverBoton = (r) => res({ boton: r }); });
+      const porVoz = VOZ.escuchar().then((t) => ({ texto: t }));
+      const r = await Promise.race([porBoton, porVoz]);
+      resolverBoton = null;
+      if (r.texto) $("vozOido").textContent = "Escuché: " + r.texto;
+      return r;
+    }
+
+    // Pregunta de confirmación (sí / no / corregir / cancelar). Regresa "si" | "no" | "corregir" | "cancelar"
+    async function confirmar(pregunta, extra) {
+      const opciones = [{ r: "si", t: "Sí", c: "#3F7A5E" }, { r: "no", t: "No", c: "#B5453A" }].concat(extra || []);
+      await decir(pregunta);
+      for (let i = 0; i < 3 && activo; i++) {
+        const r = await oir(opciones);
+        if (r.boton) return r.boton;
+        const resp = r.texto ? VOZ.respuesta(r.texto) : null;
+        if (resp) return resp;
+        await decir(r.texto ? "No entendí tu respuesta. Di sí, no o cancelar." : "No te escuché. Di sí, no o cancelar.");
+      }
+      return "cancelar";
+    }
+
+    async function pedirDato(pregunta) {
+      await decir(pregunta);
+      for (let i = 0; i < 3 && activo; i++) {
+        const r = await oir([]);
+        if (r.boton === "cancelar") return { cancelar: true };
+        if (r.texto) {
+          if (VOZ.respuesta(r.texto) === "cancelar") return { cancelar: true };
+          return { texto: r.texto };
+        }
+        await decir("No te escuché. Inténtalo de nuevo.");
+      }
+      return { cancelar: true };
+    }
+
+    return {
+      modal, $, cerrar, botones, estado, decir, oir, confirmar, pedirDato,
+      get activo() { return activo; },
+      setResolverBoton(f) { resolverBoton = f; },
+      setResolverFoto(f) { resolverFoto = f; },
+    };
+}
+
+// Flujo de voz: estado de cuenta en PDF (Presidente y Tesorero). No modifica datos: solo genera el reporte.
+async function vozEstadoCuenta(A, ctx, textoInicial) {
+  const { cuenta, tieneAcreimex } = ctx;
+  const { cerrar, decir, pedirDato, confirmar } = A;
+  let ciclos = ctx.ciclos;
+  if (!ciclos) { const r = await sb.rpc("ciclos_listar"); ciclos = (!r.error && r.data) || []; }
+  const cancelado = async () => { await decir("Cancelado."); cerrar(); };
+  let texto = textoInicial || "";
+  let intentos = 0;
+  while (A.activo && intentos++ < 6) {
+    if (!texto) {
+      const p = await pedirDato("Dime qué estado de cuenta necesitas. Por ejemplo: del mes de octubre, completo, o del 1 al 15 de octubre.");
+      if (p.cancelar) return cancelado();
+      texto = p.texto;
+    }
+    const pr = VOZ.interpretarPeriodo(texto);
+    let cuentaRep = pr.cuenta || (tieneAcreimex ? null : "Caja chica");
+    if (!cuentaRep) {
+      const q = await pedirDato("¿De qué cuenta, caja chica o Acreimex?");
+      if (q.cancelar) return cancelado();
+      const n = VOZ.norm(q.texto);
+      cuentaRep = /acreimex|acre imex|acremex/.test(n) ? "Acreimex" : (/caja/.test(n) ? "Caja chica" : null);
+      if (!cuentaRep) { await decir("No entendí la cuenta."); texto = ""; continue; }
+    }
+    let per = pr;
+    if (!pr.claro) {
+      const q = await pedirDato("¿De qué periodo? Di completo, el nombre de un mes, o un rango de fechas.");
+      if (q.cancelar) return cancelado();
+      per = VOZ.interpretarPeriodo(q.texto);
+      if (!per.claro) { await decir("No entendí el periodo."); texto = ""; continue; }
+      per.ciclo = per.ciclo || pr.ciclo; per.cicloNombre = per.cicloNombre || pr.cicloNombre;
+    }
+    // ciclo
+    const porFecha = [...ciclos].sort((x, y) => String(y.fecha_inicio || "").localeCompare(String(x.fecha_inicio || "")));
+    let ciclo;
+    if (per.cicloNombre) ciclo = ciclos.find(c => String(c.nombre).replace(/\s/g, "").replace(/[–—]/g, "-") === per.cicloNombre);
+    else if (per.ciclo === "anterior") ciclo = porFecha.find(c => c.estado === "Cerrado");
+    else ciclo = ciclos.find(c => c.estado === "Abierto") || ciclos[0] || { id: null, nombre: ESCUELA.ciclo, estado: "Abierto" };
+    if (!ciclo) { await decir(per.cicloNombre ? "No encontré ese ciclo escolar." : "Todavía no hay un ciclo anterior cerrado."); texto = ""; continue; }
+    // rango (mismo formato que usa la pantalla de Reportes)
+    let rango;
+    if (per.modo === "completo") {
+      const fin = new Date(); fin.setHours(23, 59, 59, 999);
+      rango = { modo: "completo", fechaInicio: new Date(2000, 0, 1), fechaFin: fin, texto: "Completo" };
+    } else if (per.modo === "mensual") {
+      rango = { modo: "mensual", mes: per.mes, anio: per.anio, fechaInicio: new Date(per.anio, per.mes, 1, 0, 0, 0), fechaFin: new Date(per.anio, per.mes + 1, 0, 23, 59, 59), texto: `${MESES[per.mes]} ${per.anio}` };
+    } else {
+      const fi = new Date(per.desde + "T00:00:00"), ff = new Date(per.hasta + "T23:59:59");
+      if (isNaN(fi) || isNaN(ff) || fi > ff) { await decir("Las fechas no son válidas. La fecha de inicio debe ser anterior a la final."); texto = ""; continue; }
+      rango = { modo: "personalizado", desde: per.desde, hasta: per.hasta, fechaInicio: fi, fechaFin: ff, texto: "Personalizado" };
+    }
+    const periodoTxt = rango.modo === "completo" ? "completo" : rango.modo === "mensual" ? `del mes de ${MESES[rango.mes].toLowerCase()} de ${rango.anio}` : `del ${rango.fechaInicio.toLocaleDateString("es-MX", { day: "numeric", month: "long", year: "numeric" })} al ${rango.fechaFin.toLocaleDateString("es-MX", { day: "numeric", month: "long", year: "numeric" })}`;
+    A.$("vozResumen").innerHTML = `<div class="p-3 rounded-lg mb-2 text-sm" style="background:#E6F0EA; border:1px solid #3F7A5E">
+      <p><span style="color:#6C7B8A">Documento:</span> <b>Estado de cuenta (PDF)</b></p>
+      <p><span style="color:#6C7B8A">Cuenta:</span> <b>${esc(cuentaRep)}</b></p>
+      <p><span style="color:#6C7B8A">Ciclo:</span> <b>${esc(ciclo.nombre)}</b></p>
+      <p><span style="color:#6C7B8A">Periodo:</span> <b>${esc(periodoTxt)}</b></p></div>`;
+    const c = await confirmar(`Solicitaste el estado de cuenta de ${cuentaRep}, del ciclo ${ciclo.nombre}, ${rango.modo === "completo" ? "completo" : periodoTxt}. ¿Es correcto?`);
+    if (c === "cancelar") return cancelado();
+    if (c !== "si") { A.$("vozResumen").innerHTML = ""; texto = ""; continue; }
+
+    let r;
+    try {
+      r = await conProgreso("Generando estado de cuenta en PDF…", () => estadoCuentaDeCiclo({
+        usuarioId: state.usuario.id, titular: state.usuario.nombre_completo, rol: cuenta.rol, comite: cuenta.comite_nombre,
+        cuenta: cuentaRep, ciclo, rango,
+      }));
+    } catch (e) { r = { error: e }; }
+    if (r && r.error) {
+      const m = traducirError(r.error);
+      await decir("No se pudo generar el estado de cuenta. " + m);
+      A.$("vozResumen").innerHTML = errBox(m);
+      return;
+    }
+    cerrar();
+    avisoGlobal("Estado de cuenta generado.", "ok");
+    VOZ.hablar("Listo. Tu estado de cuenta se generó en PDF.");
+    return;
+  }
+  if (A.activo) cerrar();
+}
 
 // Comprime y sube un comprobante al bucket "comprobantes"; regresa la ruta guardada
 async function subirComprobante(archivo) {
@@ -1536,85 +1749,8 @@ async function renderCaja(main) {
       avisoGlobal("Este navegador no permite dictar por voz. Usa Chrome (Android o computadora) o captura con el formulario.", "error");
       return;
     }
-    let activo = true;
-    let resolverBoton = null;
-    let resolverFoto = null;
-    const modal = document.createElement("div");
-    modal.className = "fixed inset-0 z-50 flex items-center justify-center p-4";
-    modal.style.background = "rgba(28,43,58,0.6)";
-    modal.innerHTML = `
-      <div class="rounded-2xl p-5 bg-white w-full max-w-sm">
-        <div class="flex items-center justify-between mb-2">
-          <p class="text-sm font-bold" style="color:${COLOR}">🎙 Asistente de voz</p>
-          <button id="vozSilencio" class="text-xs underline" style="color:#6C7B8A">${VOZ.estaSilenciado() ? "Activar voz" : "Silenciar voz"}</button>
-        </div>
-        <div id="vozEstado" class="text-sm font-semibold mb-2" style="color:${COLOR}">…</div>
-        <div id="vozOido" class="text-xs mb-2 p-2 rounded-lg" style="background:#F4F1EB; color:#6C7B8A; min-height:2rem"></div>
-        <div id="vozResumen"></div>
-        <div id="vozFotoWrap" class="hidden mb-2">
-          <label class="block w-full text-center py-3 rounded-lg text-sm font-bold text-white cursor-pointer" style="background:${COLOR}">📷 Tomar foto del comprobante
-            <input id="vozFoto" type="file" accept="image/*" capture="environment" class="hidden" />
-          </label>
-        </div>
-        <div id="vozBotones" class="flex gap-2 flex-wrap mb-2"></div>
-        <button id="vozCerrar" class="w-full py-2 rounded-lg text-sm font-semibold" style="background:#F4F1EB; color:${COLOR}">Cancelar</button>
-      </div>`;
-    document.body.appendChild(modal);
-    const $ = (id) => modal.querySelector("#" + id);
-
-    const cerrar = () => { activo = false; VOZ.detenerTodo(); if (resolverBoton) resolverBoton("cancelar"); if (resolverFoto) resolverFoto(null); modal.remove(); };
-    $("vozCerrar").addEventListener("click", cerrar);
-    $("vozSilencio").addEventListener("click", (e) => { VOZ.silenciar(!VOZ.estaSilenciado()); e.target.textContent = VOZ.estaSilenciado() ? "Activar voz" : "Silenciar voz"; if (VOZ.estaSilenciado()) VOZ.detenerTodo(); });
-
-    function botones(lista) {
-      $("vozBotones").innerHTML = lista.map(b => `<button data-r="${b.r}" class="flex-1 py-2 rounded-lg text-sm font-bold text-white" style="background:${b.c}; min-width:5rem">${b.t}</button>`).join("");
-      $("vozBotones").querySelectorAll("button").forEach(b => b.addEventListener("click", () => {
-        if (resolverBoton) { const f = resolverBoton; resolverBoton = null; VOZ.detenerEscucha(); f(b.dataset.r); }
-      }));
-    }
-    const estado = (t) => { if (activo) $("vozEstado").textContent = t; };
-    const decir = async (t) => { if (!activo) return; estado("🔊 " + t); await VOZ.hablar(t); };
-
-    // Escucha una frase; los botones también responden. Regresa { texto } o { boton }
-    async function oir(textoBotones) {
-      if (!activo) return { boton: "cancelar" };
-      estado("🎙 Escuchando… habla ahora");
-      botones(textoBotones || []);
-      const porBoton = new Promise((res) => { resolverBoton = (r) => res({ boton: r }); });
-      const porVoz = VOZ.escuchar().then((t) => ({ texto: t }));
-      const r = await Promise.race([porBoton, porVoz]);
-      resolverBoton = null;
-      if (r.texto) $("vozOido").textContent = "Escuché: " + r.texto;
-      return r;
-    }
-
-    // Pregunta de confirmación (sí / no / corregir / cancelar). Regresa "si" | "no" | "corregir" | "cancelar"
-    async function confirmar(pregunta, extra) {
-      const opciones = [{ r: "si", t: "Sí", c: "#3F7A5E" }, { r: "no", t: "No", c: "#B5453A" }].concat(extra || []);
-      await decir(pregunta);
-      for (let i = 0; i < 3 && activo; i++) {
-        const r = await oir(opciones);
-        if (r.boton) return r.boton;
-        const resp = r.texto ? VOZ.respuesta(r.texto) : null;
-        if (resp) return resp;
-        await decir(r.texto ? "No entendí tu respuesta. Di sí, no o cancelar." : "No te escuché. Di sí, no o cancelar.");
-      }
-      return "cancelar";
-    }
-
-    async function pedirDato(pregunta) {
-      await decir(pregunta);
-      for (let i = 0; i < 3 && activo; i++) {
-        const r = await oir([]);
-        if (r.boton === "cancelar") return { cancelar: true };
-        if (r.texto) {
-          if (VOZ.respuesta(r.texto) === "cancelar") return { cancelar: true };
-          return { texto: r.texto };
-        }
-        await decir("No te escuché. Inténtalo de nuevo.");
-      }
-      return { cancelar: true };
-    }
+    const A = crearAsistenteVoz();
+    const { $, cerrar, botones, estado, decir, oir, confirmar, pedirDato } = A;
 
     function aFormulario(d) {
       cerrar();
@@ -1651,7 +1787,7 @@ async function renderCaja(main) {
       if (!(Number(cuenta.saldo_caja_chica) > 0)) { await decir("No tienes saldo en caja chica para transferir."); return "cancelar"; }
       const lista = await cargarPersonas();
       if (!lista.length) { await decir("No encontré destinatarios disponibles."); return "cancelar"; }
-      for (let intento = 0; intento < 3 && activo; intento++) {
+      for (let intento = 0; intento < 3 && A.activo; intento++) {
         if (!destinoTexto) {
           const q = await pedirDato("¿A quién le envías? Di su nombre o su cargo.");
           if (q.cancelar) return "cancelar";
@@ -1697,13 +1833,14 @@ async function renderCaja(main) {
       const d = { tipo: null, cuenta: null, origen: null, monto: null, concepto: "" };
       let primera = true;
       // ---- 1) Captura y confirmación ----
-      while (activo) {
+      while (A.activo) {
         const t = primera
-          ? "Dime el movimiento. Por ejemplo: entrada de mil pesos por concepto de cuota."
+          ? "Dime el movimiento, o pide tu estado de cuenta. Por ejemplo: entrada de mil pesos por concepto de cuota."
           : "De acuerdo. Dime de nuevo el movimiento completo.";
         primera = false;
         const p = await pedirDato(t);
-        if (p.cancelar) { if (activo) { await decir("Cancelado. No se guardó nada."); } cerrar(); return; }
+        if (p.cancelar) { if (A.activo) { await decir("Cancelado. No se guardó nada."); } cerrar(); return; }
+        if (VOZ.esEstadoCuenta(p.texto)) { await vozEstadoCuenta(A, { cuenta, tieneAcreimex }, p.texto); return; }
         const r = VOZ.interpretar(p.texto);
         Object.assign(d, { tipo: r.tipo, cuenta: r.cuenta, origen: r.origen, monto: r.monto, concepto: r.concepto });
 
@@ -1774,7 +1911,7 @@ async function renderCaja(main) {
         if (c === "cancelar") { await decir("Cancelado. No se guardó nada."); cerrar(); return; }
         $("vozResumen").innerHTML = ""; // no / corregir -> volver a dictar
       }
-      if (!activo) return;
+      if (!A.activo) return;
 
       // ---- Transferencia a otra persona: la voz solo captura; las contraseñas se escriben en el formulario ----
       if (d.tipo === "Transferencia" && d.modo === "otros") {
@@ -1794,15 +1931,15 @@ async function renderCaja(main) {
       if (pedirFoto) {
         const sinFoto = d.tipo === "Entrada";
         await decir(sinFoto ? "Toma la foto del comprobante con el botón de la cámara." : "El comprobante es obligatorio. Toma la foto con el botón de la cámara.");
-        if (!activo) return;
+        if (!A.activo) return;
         $("vozFotoWrap").classList.remove("hidden");
         botones(sinFoto ? [{ r: "sinfoto", t: "Guardar sin comprobante", c: "#6C7B8A" }] : []);
         estado("📷 Esperando la foto del comprobante…");
-        const porFoto = new Promise((res) => { resolverFoto = res; $("vozFoto").addEventListener("change", () => res($("vozFoto").files[0] || null)); });
-        const porBoton = new Promise((res) => { resolverBoton = (r) => res(r); });
+        const porFoto = new Promise((res) => { A.setResolverFoto(res); $("vozFoto").addEventListener("change", () => res($("vozFoto").files[0] || null)); });
+        const porBoton = new Promise((res) => { A.setResolverBoton((r) => res(r)); });
         const x = await Promise.race([porFoto, porBoton]);
-        resolverFoto = null; resolverBoton = null;
-        if (!activo) return;
+        A.setResolverFoto(null); A.setResolverBoton(null);
+        if (!A.activo) return;
         if (x === "cancelar") { cerrar(); return; }
         archivo = x && x !== "sinfoto" ? x : null;
         $("vozFotoWrap").classList.add("hidden");
@@ -2425,6 +2562,7 @@ async function renderReportes(main) {
           ${periodoControlesHTML("rep", "Completo (desde el primer movimiento)", estPeriodo)}
           <div id="repMsg" class="mt-2"></div>
           <button id="repGenerar" class="w-full mt-2 py-2 rounded-lg text-sm font-bold text-white" style="background:${COLOR}">${opcion === "estado" ? "Generar PDF" : "Calcular total"}</button>
+          ${opcion === "estado" && VOZ.soportado() ? `<button id="repVoz" class="w-full mt-2 py-2 rounded-lg text-sm font-bold" style="background:#E6F0EA; color:#3F7A5E; border:1px solid #3F7A5E">🎙 Pedir estado de cuenta por voz</button>` : ""}
         </div>
         <div id="repResultado" class="mt-4"></div>
       </div>`;
@@ -2433,6 +2571,8 @@ async function renderReportes(main) {
     document.getElementById("opMov").addEventListener("click", () => { opcion = "movimiento"; pintar(); });
     periodoEnlazar("rep");
     document.getElementById("repGenerar").addEventListener("click", generar);
+    const repVoz = document.getElementById("repVoz");
+    if (repVoz) repVoz.addEventListener("click", () => vozEstadoCuenta(crearAsistenteVoz(), { cuenta, tieneAcreimex, ciclos }, ""));
   }
 
   async function generar() {
