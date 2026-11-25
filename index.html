@@ -341,6 +341,220 @@ function comprimirImagen(file, maxLado = 1600, calidad = 0.7) {
   });
 }
 
+// ============================================================
+// Asistente de voz: interpretación de frases, voz y escucha
+// ============================================================
+const VOZ = (() => {
+  const norm = (t) => String(t || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[¿?¡!.,;:]/g, " ").replace(/\s+/g, " ").trim();
+
+  const UNID = { cero: 0, un: 1, uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8, nueve: 9,
+    diez: 10, once: 11, doce: 12, trece: 13, catorce: 14, quince: 15, dieciseis: 16, diecisiete: 17, dieciocho: 18, diecinueve: 19,
+    veinte: 20, veintiun: 21, veintiuno: 21, veintiuna: 21, veintidos: 22, veintitres: 23, veinticuatro: 24, veinticinco: 25,
+    veintiseis: 26, veintisiete: 27, veintiocho: 28, veintinueve: 29 };
+  const DEC = { treinta: 30, cuarenta: 40, cincuenta: 50, sesenta: 60, setenta: 70, ochenta: 80, noventa: 90 };
+  const CENT = { cien: 100, ciento: 100, doscientos: 200, doscientas: 200, trescientos: 300, trescientas: 300, cuatrocientos: 400, cuatrocientas: 400,
+    quinientos: 500, quinientas: 500, seiscientos: 600, seiscientas: 600, setecientos: 700, setecientas: 700,
+    ochocientos: 800, ochocientas: 800, novecientos: 900, novecientas: 900 };
+
+  // Convierte una lista de palabras ("dos mil quinientos cincuenta") a número; null si no es número
+  function palabrasANumero(palabras) {
+    let total = 0, actual = 0, hubo = false;
+    for (const p of palabras) {
+      if (p === "y") continue;
+      if (p in UNID) { actual += UNID[p]; hubo = true; }
+      else if (p in DEC) { actual += DEC[p]; hubo = true; }
+      else if (p in CENT) { actual += CENT[p]; hubo = true; }
+      else if (p === "mil") { total += (actual || 1) * 1000; actual = 0; hubo = true; }
+      else if (p === "millon" || p === "millones") { total += (actual || 1) * 1000000; actual = 0; hubo = true; }
+      else return null;
+    }
+    return hubo ? total + actual : null;
+  }
+
+  // Busca el primer monto en la frase. Regresa { valor, inicio, fin } sobre el arreglo de palabras o null
+  function buscarMonto(texto) {
+    let t = String(texto || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[¿?¡!;:$]/g, " ").replace(/([^\d])[.,]/g, "$1 ").replace(/[.,]\s/g, " ").replace(/\s+/g, " ").trim();
+    // 1,500 / 1.500 / 1 500 como miles; 1500.50 / 1500,50 como decimales
+    t = t.replace(/(\d)[ ,](\d{3})(?!\d)/g, "$1$2").replace(/(\d)[ ,](\d{3})(?!\d)/g, "$1$2");
+    t = t.replace(/(\d)\.(\d{3})(?!\d)/g, "$1$2");
+    t = t.replace(/(\d),(\d{1,2})(?!\d)/g, "$1.$2");
+    const w = t.split(" ");
+    for (let i = 0; i < w.length; i++) {
+      if (/^\d+(\.\d+)?$/.test(w[i])) {
+        let valor = parseFloat(w[i]), fin = i + 1;
+        if (w[fin] === "mil" && valor < 1000) { valor *= 1000; fin++; }
+        if (/^pesos?$/.test(w[fin] || "") && w[fin + 1] === "con") fin++;
+        if (w[fin] === "con" && /^\d{1,2}$/.test(w[fin + 1] || "") && /^centavos?$/.test(w[fin + 2] || "")) { valor += parseInt(w[fin + 1]) / 100; fin += 3; }
+        return { valor, inicio: i, fin, palabras: w };
+      }
+      if (w[i] in UNID || w[i] in DEC || w[i] in CENT || w[i] === "mil" || w[i] === "millon") {
+        let j = i; const grupo = [];
+        while (j < w.length && (w[j] in UNID || w[j] in DEC || w[j] in CENT || w[j] === "mil" || w[j] === "millon" || w[j] === "millones" || w[j] === "y")) { grupo.push(w[j]); j++; }
+        while (grupo.length && grupo[grupo.length - 1] === "y") { grupo.pop(); j--; }
+        const v = palabrasANumero(grupo);
+        if (v !== null && v > 0) {
+          let valor = v, fin = j;
+          if (/^pesos?$/.test(w[fin] || "") && w[fin + 1] === "con") fin++;
+          if (w[fin] === "con") {
+            const r = []; let k = fin + 1;
+            while (k < w.length && (w[k] in UNID || w[k] in DEC || w[k] === "y")) { r.push(w[k]); k++; }
+            const c = palabrasANumero(r);
+            if (c !== null && /^centavos?$/.test(w[k] || "")) { valor += c / 100; fin = k + 1; }
+          }
+          return { valor, inicio: i, fin, palabras: w };
+        }
+      }
+    }
+    return null;
+  }
+
+  function detectarCuenta(t) {
+    if (/acreimex|acre imex|acremex/.test(t)) return "Acreimex";
+    if (/caja chica|caja/.test(t)) return "Caja chica";
+    return null;
+  }
+
+  // Concepto: lo que sigue a "concepto de", "concepto", o a "pesos por / para"; respeta el texto original (mayúsculas del dictado)
+  function extraerConcepto(textoOriginal, soloExplicito) {
+    const t = String(textoOriginal || "").replace(/\s+/g, " ").trim();
+    let m = t.match(/\b(?:por\s+)?concepto\s+(?:de\s+)?(.+)$/i);
+    if (m) return m[1].trim();
+    if (soloExplicito) return "";
+    m = t.match(/\bpesos(?:\s+con\s+\d+\s+centavos)?\s+(?:por|para|de)\s+(.+)$/i);
+    if (m) return m[1].trim();
+    return "";
+  }
+
+  // Interpreta una frase completa. Regresa { tipo, cuenta, origen, monto, concepto }
+  function interpretar(texto) {
+    const t = norm(texto);
+    const r = { tipo: null, cuenta: null, origen: null, monto: null, concepto: "" };
+    if (/\b(transfer\w*|pasar|pasa|mover)\b/.test(t)) r.tipo = "Transferencia";
+    else if (/\b(salida|egreso|gasto|retiro|pago)\b/.test(t)) r.tipo = "Salida";
+    else if (/\b(entrada|ingreso|deposito|cobro|cuota)\b/.test(t)) r.tipo = "Entrada";
+
+    const mm = buscarMonto(texto);
+    if (mm) r.monto = Math.round(mm.valor * 100) / 100;
+
+    if (r.tipo === "Transferencia") {
+      const m = t.match(/de\s+(caja chica|acreimex|caja)\s+a\s+(caja chica|acreimex|caja)/);
+      if (m) r.origen = detectarCuenta(m[1]);
+      else if (/a\s+acreimex|hacia acreimex/.test(t)) r.origen = "Caja chica";
+      else if (/a\s+(caja chica|caja)/.test(t)) r.origen = "Acreimex";
+      else r.origen = detectarCuenta(t);
+    } else {
+      // la cuenta se busca solo antes del concepto para no confundirla con el texto libre
+      const concepto = extraerConcepto(texto);
+      const antes = concepto ? texto.slice(0, texto.length - concepto.length) : texto;
+      r.cuenta = detectarCuenta(norm(antes));
+    }
+    r.concepto = extraerConcepto(texto, r.tipo === "Transferencia");
+    r.destinoTexto = "";
+    if (r.tipo === "Transferencia" && !r.origen && mm) {
+      let tail = mm.palabras.slice(mm.fin).join(" ").replace(/\s*(por )?concepto.*$/, "");
+      const m = tail.match(/^(?:pesos\s+)?(?:a la|a el|al|a|para la|para el|para)\s+(.+)$/);
+      if (m && !/acreimex|caja chica/.test(m[1])) r.destinoTexto = m[1].trim();
+    }
+    return r;
+  }
+
+  // Respuestas de confirmación
+  function respuesta(texto) {
+    const t = norm(texto);
+    if (/\b(cancelar|cancela|cancelalo|olvidalo|salir|abandonar|detener|ya no)\b/.test(t)) return "cancelar";
+    if (/\b(corregir|corrige|cambiar|cambia|repetir|repite|volver a|de nuevo|otra vez|incorrecto|esta mal)\b/.test(t)) return "corregir";
+    if (/^(no|nel|negativo)\b|\bno (quiero|deseo|gracias|es correcto|lo)\b/.test(t)) return "no";
+    if (/\b(si|sip|correcto|confirmo|confirmar|confirmado|afirmativo|exacto|claro|ok|esta bien|asi es|adelante|dale|de acuerdo|subir|sube)\b/.test(t)) return "si";
+    return null;
+  }
+
+
+  // Busca personas cuyo nombre, cargo o comité contengan todas las palabras dichas
+  const RELLENO = new Set(["de", "del", "la", "el", "los", "las", "y", "senor", "senora", "sr", "sra", "profesor", "profesora", "maestro", "maestra", "comite", "presidente", "presidenta", "tesorero", "tesorera"]);
+  function buscarPersonas(texto, lista) {
+    const n = norm(texto);
+    const pal = n.split(" ").filter(Boolean);
+    const rolPedido = /presiden/.test(n) ? "presidente" : (/tesorer/.test(n) ? "tesorero" : null);
+    const claves = pal.filter(p => p.length > 2 && !RELLENO.has(p));
+    return (lista || []).filter(u => {
+      const rol = norm(u.rol);
+      if (rolPedido && rol !== rolPedido) return false;
+      const pajar = norm(`${u.nombre_completo} ${u.comite_nombre || ""}`);
+      if (!claves.length && !rolPedido) return false;
+      return claves.every(c => pajar.includes(c));
+    });
+  }
+
+  const montoVoz = (n) => {
+    const e = Math.floor(n), c = Math.round((n - e) * 100);
+    return c ? `${e} pesos con ${c} centavos` : `${e} pesos`;
+  };
+
+  // ----- Voz sintetizada y reconocimiento -----
+  const getSR = () => (typeof window !== "undefined" ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null);
+  const soportado = () => !!getSR();
+  const puedeHablar = () => typeof window !== "undefined" && "speechSynthesis" in window;
+  let silenciado = false;
+
+  function hablar(texto) {
+    return new Promise((resolve) => {
+      if (silenciado || !puedeHablar()) { resolve(); return; }
+      try {
+        window.speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(texto);
+        u.lang = "es-MX"; u.rate = 1;
+        const voces = window.speechSynthesis.getVoices();
+        const v = voces.find(x => /es[-_]MX/i.test(x.lang)) || voces.find(x => /^es/i.test(x.lang));
+        if (v) u.voice = v;
+        let fin = false;
+        const listo = () => { if (!fin) { fin = true; resolve(); } };
+        u.onend = listo; u.onerror = listo;
+        setTimeout(listo, Math.max(4000, texto.length * 90));
+        window.speechSynthesis.speak(u);
+      } catch (e) { resolve(); }
+    });
+  }
+
+  let rec = null, finActual = null;
+  function detenerEscucha() {
+    const f = finActual; finActual = null;
+    try { if (rec) { rec.onend = null; rec.onerror = null; rec.onresult = null; rec.abort(); } } catch (e) {}
+    rec = null;
+    if (f) f(null);
+  }
+  function detenerTodo() { detenerEscucha(); try { if (puedeHablar()) window.speechSynthesis.cancel(); } catch (e) {} }
+
+  // Escucha una frase. Resuelve con el texto, o null si no se entendió / no habló / se interrumpió
+  function escuchar(msMax = 12000) {
+    return new Promise((resolve) => {
+      const SR = getSR();
+      if (!SR) { resolve(null); return; }
+      detenerEscucha();
+      let texto = "", hecho = false;
+      const mi = new SR();
+      const fin = (v) => {
+        if (hecho) return; hecho = true; clearTimeout(tm);
+        if (rec === mi) { rec = null; finActual = null; }
+        try { mi.onend = null; mi.onerror = null; mi.onresult = null; mi.abort(); } catch (e) {}
+        resolve(v);
+      };
+      const tm = setTimeout(() => fin(texto || null), msMax);
+      try {
+        rec = mi; finActual = fin;
+        mi.lang = "es-MX"; mi.interimResults = false; mi.maxAlternatives = 1; mi.continuous = false;
+        mi.onresult = (e) => { texto = Array.from(e.results).map(r => r[0].transcript).join(" ").trim(); };
+        mi.onerror = () => fin(texto || null);
+        mi.onend = () => fin(texto || null);
+        mi.start();
+      } catch (e) { fin(null); }
+    });
+  }
+
+  return { norm, buscarMonto, buscarPersonas, interpretar, respuesta, montoVoz, hablar, escuchar, detenerEscucha, detenerTodo, soportado, puedeHablar,
+    silenciar: (v) => { silenciado = !!v; }, estaSilenciado: () => silenciado };
+})();
+const esc = (t) => String(t == null ? "" : t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
 // Comprime y sube un comprobante al bucket "comprobantes"; regresa la ruta guardada
 async function subirComprobante(archivo) {
   const comprimido = await comprimirImagen(archivo);
@@ -1152,6 +1366,7 @@ async function renderCaja(main) {
           </div>` : ""}
         </div>
 
+        ${VOZ.soportado() ? `<button id="btnVoz" class="w-full py-2 rounded-lg text-sm font-bold mb-2" style="background:#E6F0EA; color:#3F7A5E; border:1px solid #3F7A5E">🎙 Registrar por voz</button>` : ""}
         <div class="flex gap-2 mb-2">
           <button id="btnNuevaEntrada" class="flex-1 py-2 rounded-lg text-sm font-bold text-white" style="background:#3F7A5E">+ Entrada</button>
           <button id="btnNuevaSalida" ${puedeSalida ? "" : "disabled"} class="flex-1 py-2 rounded-lg text-sm font-bold text-white" style="background:${puedeSalida ? "#B5453A" : "#B9C3CC"}; ${puedeSalida ? "" : "cursor:not-allowed"}">− Salida${puedeSalida ? "" : " (sin saldo)"}</button>
@@ -1193,6 +1408,8 @@ async function renderCaja(main) {
       </div>`;
 
     document.getElementById("btnNuevaEntrada").addEventListener("click", () => mostrarFormMovimiento("Entrada"));
+    const btnVoz = document.getElementById("btnVoz");
+    if (btnVoz) btnVoz.addEventListener("click", abrirAsistenteVoz);
     document.getElementById("btnNuevaSalida").addEventListener("click", () => { if (puedeSalida) mostrarFormMovimiento("Salida"); });
     document.getElementById("btnNuevaTransferencia").addEventListener("click", () => { if (puedeTransferir) mostrarFormTransferencia(); });
     const btnAuto = document.getElementById("btnAutoTransferencia");
@@ -1307,6 +1524,321 @@ async function renderCaja(main) {
 
       renderCaja(main);
     });
+  }
+
+  // ---------- Asistente de voz (entradas, salidas y transferencia entre mis 2 cuentas) ----------
+  async function abrirAsistenteVoz() {
+    if (!VOZ.soportado()) {
+      avisoGlobal("Este navegador no permite dictar por voz. Usa Chrome (Android o computadora) o captura con el formulario.", "error");
+      return;
+    }
+    let activo = true;
+    let resolverBoton = null;
+    let resolverFoto = null;
+    const modal = document.createElement("div");
+    modal.className = "fixed inset-0 z-50 flex items-center justify-center p-4";
+    modal.style.background = "rgba(28,43,58,0.6)";
+    modal.innerHTML = `
+      <div class="rounded-2xl p-5 bg-white w-full max-w-sm">
+        <div class="flex items-center justify-between mb-2">
+          <p class="text-sm font-bold" style="color:${COLOR}">🎙 Asistente de voz</p>
+          <button id="vozSilencio" class="text-xs underline" style="color:#6C7B8A">${VOZ.estaSilenciado() ? "Activar voz" : "Silenciar voz"}</button>
+        </div>
+        <div id="vozEstado" class="text-sm font-semibold mb-2" style="color:${COLOR}">…</div>
+        <div id="vozOido" class="text-xs mb-2 p-2 rounded-lg" style="background:#F4F1EB; color:#6C7B8A; min-height:2rem"></div>
+        <div id="vozResumen"></div>
+        <div id="vozFotoWrap" class="hidden mb-2">
+          <label class="block w-full text-center py-3 rounded-lg text-sm font-bold text-white cursor-pointer" style="background:${COLOR}">📷 Tomar foto del comprobante
+            <input id="vozFoto" type="file" accept="image/*" capture="environment" class="hidden" />
+          </label>
+        </div>
+        <div id="vozBotones" class="flex gap-2 flex-wrap mb-2"></div>
+        <button id="vozCerrar" class="w-full py-2 rounded-lg text-sm font-semibold" style="background:#F4F1EB; color:${COLOR}">Cancelar</button>
+      </div>`;
+    document.body.appendChild(modal);
+    const $ = (id) => modal.querySelector("#" + id);
+
+    const cerrar = () => { activo = false; VOZ.detenerTodo(); if (resolverBoton) resolverBoton("cancelar"); if (resolverFoto) resolverFoto(null); modal.remove(); };
+    $("vozCerrar").addEventListener("click", cerrar);
+    $("vozSilencio").addEventListener("click", (e) => { VOZ.silenciar(!VOZ.estaSilenciado()); e.target.textContent = VOZ.estaSilenciado() ? "Activar voz" : "Silenciar voz"; if (VOZ.estaSilenciado()) VOZ.detenerTodo(); });
+
+    function botones(lista) {
+      $("vozBotones").innerHTML = lista.map(b => `<button data-r="${b.r}" class="flex-1 py-2 rounded-lg text-sm font-bold text-white" style="background:${b.c}; min-width:5rem">${b.t}</button>`).join("");
+      $("vozBotones").querySelectorAll("button").forEach(b => b.addEventListener("click", () => {
+        if (resolverBoton) { const f = resolverBoton; resolverBoton = null; VOZ.detenerEscucha(); f(b.dataset.r); }
+      }));
+    }
+    const estado = (t) => { if (activo) $("vozEstado").textContent = t; };
+    const decir = async (t) => { if (!activo) return; estado("🔊 " + t); await VOZ.hablar(t); };
+
+    // Escucha una frase; los botones también responden. Regresa { texto } o { boton }
+    async function oir(textoBotones) {
+      if (!activo) return { boton: "cancelar" };
+      estado("🎙 Escuchando… habla ahora");
+      botones(textoBotones || []);
+      const porBoton = new Promise((res) => { resolverBoton = (r) => res({ boton: r }); });
+      const porVoz = VOZ.escuchar().then((t) => ({ texto: t }));
+      const r = await Promise.race([porBoton, porVoz]);
+      resolverBoton = null;
+      if (r.texto) $("vozOido").textContent = "Escuché: " + r.texto;
+      return r;
+    }
+
+    // Pregunta de confirmación (sí / no / corregir / cancelar). Regresa "si" | "no" | "corregir" | "cancelar"
+    async function confirmar(pregunta, extra) {
+      const opciones = [{ r: "si", t: "Sí", c: "#3F7A5E" }, { r: "no", t: "No", c: "#B5453A" }].concat(extra || []);
+      await decir(pregunta);
+      for (let i = 0; i < 3 && activo; i++) {
+        const r = await oir(opciones);
+        if (r.boton) return r.boton;
+        const resp = r.texto ? VOZ.respuesta(r.texto) : null;
+        if (resp) return resp;
+        await decir(r.texto ? "No entendí tu respuesta. Di sí, no o cancelar." : "No te escuché. Di sí, no o cancelar.");
+      }
+      return "cancelar";
+    }
+
+    async function pedirDato(pregunta) {
+      await decir(pregunta);
+      for (let i = 0; i < 3 && activo; i++) {
+        const r = await oir([]);
+        if (r.boton === "cancelar") return { cancelar: true };
+        if (r.texto) {
+          if (VOZ.respuesta(r.texto) === "cancelar") return { cancelar: true };
+          return { texto: r.texto };
+        }
+        await decir("No te escuché. Inténtalo de nuevo.");
+      }
+      return { cancelar: true };
+    }
+
+    function aFormulario(d) {
+      cerrar();
+      if (d.tipo === "Transferencia") { mostrarFormAutoTransferencia(); const o = document.getElementById("atOrigen"); if (o) o.value = d.origen; const m = document.getElementById("atMonto"); if (m) m.value = d.monto; return; }
+      mostrarFormMovimiento(d.tipo);
+      const c = document.getElementById("movCuenta"); if (c) c.value = d.cuenta;
+      document.getElementById("movMonto").value = d.monto;
+      document.getElementById("movConcepto").value = d.concepto;
+    }
+
+    let personas = null;
+    async function cargarPersonas() {
+      if (personas) return personas;
+      const { data, error } = await conProgreso("Cargando destinatarios…", () => sb.rpc("usuarios_transferibles_listar"));
+      personas = error ? [] : (data || []).filter(u => u.id !== state.usuario.id);
+      return personas;
+    }
+    // Decide si la transferencia es entre mis cuentas o a otra persona y localiza al destinatario
+    async function resolverTransferencia(d, r) {
+      d.modo = null; d.persona = null;
+      let destinoTexto = r.destinoTexto || "";
+      if (r.origen && tieneAcreimex) d.modo = "propias";
+      else if (destinoTexto) d.modo = "otros";
+      else if (tieneAcreimex) {
+        const q = await pedirDato("¿La transferencia es entre tus dos cuentas o para otra persona? Di entre mis cuentas, o el nombre o cargo de quien recibe.");
+        if (q.cancelar) return "cancelar";
+        if (/\b(cuentas|mis dos|entre mis)\b/.test(VOZ.norm(q.texto))) d.modo = "propias";
+        else { d.modo = "otros"; destinoTexto = q.texto; }
+      } else {
+        d.modo = "otros";
+      }
+      if (d.modo === "propias") { d.origen = r.origen || null; return "ok"; }
+
+      if (!(Number(cuenta.saldo_caja_chica) > 0)) { await decir("No tienes saldo en caja chica para transferir."); return "cancelar"; }
+      const lista = await cargarPersonas();
+      if (!lista.length) { await decir("No encontré destinatarios disponibles."); return "cancelar"; }
+      for (let intento = 0; intento < 3 && activo; intento++) {
+        if (!destinoTexto) {
+          const q = await pedirDato("¿A quién le envías? Di su nombre o su cargo.");
+          if (q.cancelar) return "cancelar";
+          destinoTexto = q.texto;
+        }
+        const hallados = VOZ.buscarPersonas(destinoTexto, lista);
+        if (hallados.length === 1) { d.persona = hallados[0]; return "ok"; }
+        if (hallados.length > 1) {
+          const opciones = hallados.slice(0, 4);
+          const etiqueta = (u) => `${u.nombre_completo}, ${u.rol}${u.comite_nombre ? " de " + u.comite_nombre : ""}`;
+          $("vozResumen").innerHTML = `<div class="mb-2 text-xs" style="color:#6C7B8A">Elige a quién:</div>` + opciones.map((u, i) => `<button data-pi="${i}" class="vozPersona w-full text-left px-3 py-2 rounded-lg text-sm mb-1 border" style="border-color:#E1DED5">${esc(etiqueta(u))}</button>`).join("");
+          const elegida = new Promise((res) => { $("vozResumen").querySelectorAll(".vozPersona").forEach(b => b.addEventListener("click", () => { VOZ.detenerEscucha(); res({ boton: b.dataset.pi }); })); });
+          await decir("Encontré varias personas: " + opciones.map(etiqueta).join("; ") + ". Di el nombre completo o el cargo y comité, o tócala en pantalla.");
+          const r2 = await Promise.race([elegida, oir([]) ]);
+          $("vozResumen").innerHTML = "";
+          if (r2.boton === "cancelar") return "cancelar";
+          if (r2.boton !== undefined) { d.persona = opciones[Number(r2.boton)]; return "ok"; }
+          if (r2.texto && VOZ.respuesta(r2.texto) === "cancelar") return "cancelar";
+          destinoTexto = r2.texto || "";
+          const otra = VOZ.buscarPersonas(destinoTexto, opciones);
+          if (otra.length === 1) { d.persona = otra[0]; return "ok"; }
+          continue;
+        }
+        await decir("No encontré a esa persona.");
+        destinoTexto = "";
+      }
+      return "cancelar";
+    }
+    async function aFormularioTransferenciaOtros(d) {
+      cerrar();
+      await mostrarFormTransferencia();
+      const sel = document.getElementById("trDestino");
+      if (!sel) return;
+      sel.value = d.persona.id;
+      sel.dispatchEvent(new Event("change"));
+      document.getElementById("trMonto").value = d.monto;
+      if (d.concepto) document.getElementById("trConcepto").value = d.concepto;
+      sel.scrollIntoView({ behavior: "smooth", block: "center" });
+      avisoGlobal("Datos cargados por voz. Escribe las contraseñas de autorización y presiona Transferir.", "ok");
+    }
+
+    try {
+      const d = { tipo: null, cuenta: null, origen: null, monto: null, concepto: "" };
+      let primera = true;
+      // ---- 1) Captura y confirmación ----
+      while (activo) {
+        const t = primera
+          ? "Dime el movimiento. Por ejemplo: entrada de mil pesos por concepto de cuota."
+          : "De acuerdo. Dime de nuevo el movimiento completo.";
+        primera = false;
+        const p = await pedirDato(t);
+        if (p.cancelar) { if (activo) { await decir("Cancelado. No se guardó nada."); } cerrar(); return; }
+        const r = VOZ.interpretar(p.texto);
+        Object.assign(d, { tipo: r.tipo, cuenta: r.cuenta, origen: r.origen, monto: r.monto, concepto: r.concepto });
+
+        if (!d.tipo) {
+          const q = await pedirDato("¿Es una entrada, una salida o una transferencia?");
+          if (q.cancelar) { await decir("Cancelado. No se guardó nada."); cerrar(); return; }
+          d.tipo = VOZ.interpretar(q.texto).tipo || (/entrada|ingreso/.test(VOZ.norm(q.texto)) ? "Entrada" : null);
+          if (!d.tipo) { await decir("No entendí el tipo de movimiento."); continue; }
+        }
+        if (d.tipo === "Transferencia") {
+          const rr = await resolverTransferencia(d, r);
+          if (rr === "cancelar") { await decir("Cancelado. No se guardó nada."); cerrar(); return; }
+          if (rr === "seguir") continue;
+        }
+        if (d.tipo === "Salida" && !puedeSalidaVoz()) { await decir("No tienes saldo disponible para registrar una salida."); cerrar(); return; }
+        if (!d.monto) {
+          const q = await pedirDato("¿De qué cantidad?");
+          if (q.cancelar) { await decir("Cancelado. No se guardó nada."); cerrar(); return; }
+          const mm = VOZ.buscarMonto(q.texto);
+          if (!mm) { await decir("No entendí la cantidad."); continue; }
+          d.monto = Math.round(mm.valor * 100) / 100;
+        }
+        if (d.tipo === "Transferencia") {
+          if (d.modo === "propias" && !d.origen) {
+            const q = await pedirDato("¿De qué cuenta sale el dinero, caja chica o Acreimex?");
+            if (q.cancelar) { await decir("Cancelado. No se guardó nada."); cerrar(); return; }
+            const n = VOZ.norm(q.texto);
+            d.origen = /acreimex|acre imex|acremex/.test(n) ? "Acreimex" : (/caja/.test(n) ? "Caja chica" : null);
+            if (!d.origen) { await decir("No entendí la cuenta."); continue; }
+          }
+          if (d.modo === "propias") d.destino = d.origen === "Caja chica" ? "Acreimex" : "Caja chica";
+        } else {
+          if (!d.cuenta) {
+            if (tieneAcreimex) {
+              const q = await pedirDato("¿En qué cuenta, caja chica o Acreimex?");
+              if (q.cancelar) { await decir("Cancelado. No se guardó nada."); cerrar(); return; }
+              const n = VOZ.norm(q.texto);
+              d.cuenta = /acreimex|acre imex|acremex/.test(n) ? "Acreimex" : (/caja/.test(n) ? "Caja chica" : null);
+              if (!d.cuenta) { await decir("No entendí la cuenta."); continue; }
+            } else d.cuenta = "Caja chica";
+          }
+          if (!d.concepto) {
+            const q = await pedirDato("¿Cuál es el concepto?");
+            if (q.cancelar) { await decir("Cancelado. No se guardó nada."); cerrar(); return; }
+            d.concepto = q.texto.replace(/^(por\s+)?(concepto\s+)?(de\s+)?/i, "").trim() || q.texto;
+          }
+        }
+
+        // resumen en pantalla + confirmación hablada
+        const lineas = d.tipo === "Transferencia" && d.modo === "otros"
+          ? [["Movimiento", "Transferencia a otra persona"], ["Para", d.persona.nombre_completo + " — " + d.persona.rol + (d.persona.comite_nombre ? " de " + d.persona.comite_nombre : "")], ["Monto", "$" + d.monto.toFixed(2)]].concat(d.concepto ? [["Concepto", d.concepto]] : [])
+          : d.tipo === "Transferencia"
+          ? [["Movimiento", "Transferencia entre mis cuentas"], ["De", d.origen], ["A", d.destino], ["Monto", "$" + d.monto.toFixed(2)]]
+          : [["Movimiento", d.tipo], ["Cuenta", d.cuenta], ["Monto", "$" + d.monto.toFixed(2)], ["Concepto", d.concepto]];
+        $("vozResumen").innerHTML = `<div class="p-3 rounded-lg mb-2 text-sm" style="background:#E6F0EA; border:1px solid #3F7A5E">${lineas.map(l => `<p><span style="color:#6C7B8A">${l[0]}:</span> <b>${esc(l[1])}</b></p>`).join("")}</div>`;
+        const frase = d.tipo === "Entrada"
+          ? `Solicitaste registrar un ingreso de capital por la cantidad de ${VOZ.montoVoz(d.monto)} en ${d.cuenta}, por concepto de ${d.concepto}. ¿Es correcto?`
+          : d.tipo === "Salida"
+            ? `Solicitaste registrar una salida de ${VOZ.montoVoz(d.monto)} de ${d.cuenta}, por concepto de ${d.concepto}. ¿Es correcto?`
+            : d.modo === "otros"
+              ? `Solicitaste transferir ${VOZ.montoVoz(d.monto)} a ${d.persona.nombre_completo}, ${d.persona.rol}${d.persona.comite_nombre ? " de " + d.persona.comite_nombre : ""}${d.concepto ? ", por concepto de " + d.concepto : ""}. ¿Es correcto?`
+              : `Solicitaste transferir ${VOZ.montoVoz(d.monto)} de ${d.origen} a ${d.destino}. ¿Es correcto?`;
+        const c = await confirmar(frase, [{ r: "formulario", t: "Editar en formulario", c: COLOR }]);
+        if (c === "si") break;
+        if (c === "formulario") { aFormulario(d); return; }
+        if (c === "cancelar") { await decir("Cancelado. No se guardó nada."); cerrar(); return; }
+        $("vozResumen").innerHTML = ""; // no / corregir -> volver a dictar
+      }
+      if (!activo) return;
+
+      // ---- Transferencia a otra persona: la voz solo captura; las contraseñas se escriben en el formulario ----
+      if (d.tipo === "Transferencia" && d.modo === "otros") {
+        await decir("Para autorizar la transferencia se necesitan las contraseñas. Escríbelas tú en el formulario y presiona Transferir. Yo no las escucho ni las guardo.");
+        aFormularioTransferenciaOtros(d);
+        return;
+      }
+
+      // ---- 2) Comprobante ----
+      let archivo = null;
+      let pedirFoto = d.tipo !== "Entrada";
+      if (d.tipo === "Entrada") {
+        const c = await confirmar("¿Deseas subir el comprobante?");
+        if (c === "cancelar") { await decir("Cancelado. No se guardó nada."); cerrar(); return; }
+        pedirFoto = c === "si";
+      }
+      if (pedirFoto) {
+        const sinFoto = d.tipo === "Entrada";
+        await decir(sinFoto ? "Toma la foto del comprobante con el botón de la cámara." : "El comprobante es obligatorio. Toma la foto con el botón de la cámara.");
+        if (!activo) return;
+        $("vozFotoWrap").classList.remove("hidden");
+        botones(sinFoto ? [{ r: "sinfoto", t: "Guardar sin comprobante", c: "#6C7B8A" }] : []);
+        estado("📷 Esperando la foto del comprobante…");
+        const porFoto = new Promise((res) => { resolverFoto = res; $("vozFoto").addEventListener("change", () => res($("vozFoto").files[0] || null)); });
+        const porBoton = new Promise((res) => { resolverBoton = (r) => res(r); });
+        const x = await Promise.race([porFoto, porBoton]);
+        resolverFoto = null; resolverBoton = null;
+        if (!activo) return;
+        if (x === "cancelar") { cerrar(); return; }
+        archivo = x && x !== "sinfoto" ? x : null;
+        $("vozFotoWrap").classList.add("hidden");
+        $("vozBotones").innerHTML = "";
+      }
+
+      // ---- 3) Guardar ----
+      estado("Guardando…");
+      const resultado = await conProgreso(archivo ? "Comprimiendo y subiendo comprobante…" : "Guardando…", async () => {
+        let comprobantePath = null;
+        if (archivo) {
+          try { comprobantePath = await subirComprobante(archivo); } catch (errSubida) { return { errorSubida: errSubida }; }
+        }
+        if (d.tipo === "Transferencia") {
+          return await sb.rpc("transferencia_registrar", {
+            p_usuario_origen_id: state.usuario.id, p_usuario_destino_id: state.usuario.id, p_monto: d.monto, p_concepto: null,
+            p_comprobante_path: comprobantePath, p_cuenta_origen: d.origen, p_cuenta_destino: d.destino,
+          });
+        }
+        return await sb.rpc("movimiento_registrar", {
+          p_usuario_id: state.usuario.id, p_tipo: d.tipo, p_cuenta: d.cuenta, p_monto: d.monto, p_concepto: d.concepto,
+          p_comentarios: null, p_comprobante_path: comprobantePath,
+        });
+      });
+      if (resultado.errorSubida || resultado.error) {
+        const m = resultado.errorSubida ? "No se pudo subir el comprobante: " + traducirError(resultado.errorSubida) : traducirError(resultado.error);
+        await decir("No se pudo guardar. " + m);
+        $("vozResumen").innerHTML = errBox(m);
+        return;
+      }
+      cerrar();
+      avisoGlobal("Movimiento registrado correctamente.", "ok");
+      VOZ.hablar("Listo. El movimiento quedó registrado.");
+      renderCaja(main);
+    } catch (e) {
+      cerrar();
+      avisoGlobal("El asistente de voz tuvo un problema: " + (e && e.message ? e.message : e), "error");
+    }
+  }
+
+  function puedeSalidaVoz() {
+    return Number(cuenta.saldo_caja_chica) > 0 || (tieneAcreimex && Number(cuenta.saldo_acreimex) > 0);
   }
 
   // ---------- Eliminar movimiento (con autorización) ----------
