@@ -379,6 +379,7 @@ const VOZ = (() => {
     t = t.replace(/(\d)\.(\d{3})(?!\d)/g, "$1$2");
     t = t.replace(/(\d),(\d{1,2})(?!\d)/g, "$1.$2");
     const w = t.split(" ");
+    const hayDigitos = w.some(x => /^\d+(\.\d+)?$/.test(x));
     for (let i = 0; i < w.length; i++) {
       if (/^\d+(\.\d+)?$/.test(w[i])) {
         let valor = parseFloat(w[i]), fin = i + 1;
@@ -387,11 +388,14 @@ const VOZ = (() => {
         if (w[fin] === "con" && /^\d{1,2}$/.test(w[fin + 1] || "") && /^centavos?$/.test(w[fin + 2] || "")) { valor += parseInt(w[fin + 1]) / 100; fin += 3; }
         return { valor, inicio: i, fin, palabras: w };
       }
-      if (w[i] in UNID || w[i] in DEC || w[i] in CENT || w[i] === "mil" || w[i] === "millon") {
+      if (!hayDigitos && (w[i] in UNID || w[i] in DEC || w[i] in CENT || w[i] === "mil" || w[i] === "millon")) {
         let j = i; const grupo = [];
         while (j < w.length && (w[j] in UNID || w[j] in DEC || w[j] in CENT || w[j] === "mil" || w[j] === "millon" || w[j] === "millones" || w[j] === "y")) { grupo.push(w[j]); j++; }
         while (grupo.length && grupo[grupo.length - 1] === "y") { grupo.pop(); j--; }
         const v = palabrasANumero(grupo);
+        // "un / una / uno" sueltos ("un ingreso", "una multa") no son un monto, salvo que digan "un peso"
+        const soloUno = grupo.length === 1 && /^(un|uno|una)$/.test(grupo[0]) && !/^pesos?$/.test(w[j] || "");
+        if (soloUno) { i = j - 1; continue; }
         if (v !== null && v > 0) {
           let valor = v, fin = j;
           if (/^pesos?$/.test(w[fin] || "") && w[fin + 1] === "con") fin++;
@@ -1744,7 +1748,9 @@ async function renderCaja(main) {
           if (!d.concepto) {
             const q = await pedirDato("¿Cuál es el concepto?");
             if (q.cancelar) { await decir("Cancelado. No se guardó nada."); cerrar(); return; }
-            d.concepto = q.texto.replace(/^(por\s+)?(concepto\s+)?(de\s+)?/i, "").trim() || q.texto;
+            const rq = VOZ.interpretar(q.texto);
+            if (rq.tipo && rq.monto && rq.concepto) { d.concepto = rq.concepto; d.monto = rq.monto; if (rq.cuenta) d.cuenta = rq.cuenta; }
+            else d.concepto = q.texto.replace(/^(por\s+)?(concepto\s+)?(de\s+)?/i, "").trim() || q.texto;
           }
         }
 
